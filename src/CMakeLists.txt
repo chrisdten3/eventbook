@@ -3,6 +3,9 @@
 # what makes the same book and feature code reachable from both live collection
 # and offline replay (AGENTS.md, "One event model, two data sources").
 add_library(eventbook_core
+  common/decimal.cpp
+  common/price.cpp
+  common/quantity.cpp
   common/version.cpp
 )
 add_library(eventbook::core ALIAS eventbook_core)
