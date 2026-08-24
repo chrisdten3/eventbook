@@ -64,6 +64,23 @@ bool configure_trust_store(ssl::context& context) {
     return loaded || !ec;
 }
 
+// SSL_set_tlsext_host_name is a macro expanding to an SSL_ctrl call that
+// contains a C-style cast to void*. Clang suppresses diagnostics for macros
+// defined in system headers; GCC attributes the cast to our expansion site
+// instead, so -Wold-style-cast fires on code we did not write and -Werror
+// stops the build. Isolating the call here keeps the suppression to one line
+// rather than blanketing the file.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#endif
+bool set_sni_hostname(::SSL* handle, const char* host) {
+    return SSL_set_tlsext_host_name(handle, host) == 1;
+}
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 /// Beast reports a blown deadline as beast::error::timeout regardless of which
 /// step blew it, so the distinction is preserved by the caller's fallback.
 HttpError classify(const beast::error_code& ec, HttpError fallback) {
@@ -117,7 +134,7 @@ Result<HttpResponse, HttpError> BeastHttpTransport::send(const HttpRequest& requ
     // Server Name Indication. Kalshi sits behind shared infrastructure, so
     // without SNI the peer cannot know which certificate to present and
     // verification fails for reasons that look like a network problem.
-    if (SSL_set_tlsext_host_name(stream.native_handle(), request.host.c_str()) != 1) {
+    if (!set_sni_hostname(stream.native_handle(), request.host.c_str())) {
         return Failure{HttpError::TlsContextFailed};
     }
     // Checks the certificate actually names this host. verify_peer alone only
