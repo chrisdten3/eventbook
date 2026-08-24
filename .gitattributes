@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zst binary
+*.parquet binary
+
+# Notebooks produce noisy diffs; keep them out of the default diff view.
+*.ipynb -diff

@@ -1,0 +1,51 @@
+# eventbook example configuration
+#
+# Copy to config/local.yaml (git-ignored) and edit. Never put credentials in
+# this file or any other tracked file.
+#
+#   cp config/example.yaml config/local.yaml
+#
+# Credentials are read from the environment only:
+#   EVENTBOOK_KALSHI_KEY_ID    - Kalshi API key id
+#   EVENTBOOK_KALSHI_KEY_PATH  - path to the RSA private key used for request signing
+
+environment: demo          # demo | production. Version one is read-only in both.
+
+rest:
+  # Verify the current host against https://docs.kalshi.com/ before relying on it.
+  base_url: "https://demo-api.kalshi.co/trade-api/v2"
+  timeout_ms: 5000
+  max_requests_per_second: 5   # stay under the documented rate limit
+
+websocket:
+  url: "wss://demo-api.kalshi.co/trade-api/ws/v2"
+  # Subscribe on the YES-price scale explicitly rather than relying on a future
+  # default (AGENTS.md, "Prediction-market order-book conventions").
+  use_yes_price: true
+  channels:
+    - orderbook_delta
+    - trade
+    - market_lifecycle
+  reconnect:
+    initial_backoff_ms: 500
+    max_backoff_ms: 30000
+    # On reconnect the book is invalid until a fresh snapshot arrives.
+    resnapshot_on_reconnect: true
+
+markets:
+  # Explicit tickers, or a series filter once M1 lands market discovery.
+  tickers: []
+  series: ""
+
+journal:
+  directory: "data/raw"
+  # Rotate by size and by wall-clock hour so a crash costs at most one segment.
+  rotate_bytes: 268435456      # 256 MiB
+  rotate_interval_minutes: 60
+  compression: zstd
+  compression_level: 3
+  fsync_on_rotate: true
+
+logging:
+  level: info                  # trace | debug | info | warn | error
+  file: ""                     # empty means stderr only

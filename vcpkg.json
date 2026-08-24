@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "eventbook",
+  "version": "0.1.0",
+  "description": "C++20 market-microstructure and execution-research platform for Kalshi binary event contracts.",
+  "homepage": "https://github.com/chrisdten3/eventbook",
+  "license": "MIT",
+  "dependencies": [
+    "fmt",
+    "spdlog",
+    "cli11"
+  ],
+  "features": {
+    "tests": {
+      "description": "Unit, property, and integration tests",
+      "dependencies": [
+        "catch2"
+      ]
+    }
+  },
+  "default-features": [
+    "tests"
+  ]
+}

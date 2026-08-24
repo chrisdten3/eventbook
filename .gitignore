@@ -1,0 +1,51 @@
+# ---- Build output ----
+build/
+out/
+cmake-build-*/
+compile_commands.json
+.cache/
+
+# ---- vcpkg ----
+vcpkg_installed/
+
+# ---- Secrets: never commit credentials of any kind ----
+# See AGENTS.md, "External references and API rules".
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+secrets.yaml
+config/local.yaml
+config/*.local.yaml
+
+# ---- Recorded and derived market data ----
+# Raw journals and derived datasets are large and reproducible; only small,
+# sanitized fixtures under tests/fixtures/ belong in Git.
+data/raw/**
+data/derived/**
+!data/raw/.gitkeep
+!data/derived/.gitkeep
+*.jsonl
+*.jsonl.zst
+*.parquet
+!tests/fixtures/**
+
+# ---- Generated results ----
+results/**
+!results/.gitkeep
+
+# ---- Python research layer ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ---- Editors / OS ----
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json.example
+*.swp
