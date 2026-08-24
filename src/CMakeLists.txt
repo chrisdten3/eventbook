@@ -3,6 +3,9 @@
 # what makes the same book and feature code reachable from both live collection
 # and offline replay (AGENTS.md, "One event model, two data sources").
 add_library(eventbook_core
+  api/beast_http_transport.cpp
+  api/http.cpp
+  api/rest_client.cpp
   common/decimal.cpp
   common/price.cpp
   common/quantity.cpp
@@ -34,4 +37,10 @@ target_link_libraries(eventbook_core
     fmt::fmt
   PRIVATE
     eventbook::warnings
+    # Boost.Beast and OpenSSL are PRIVATE on purpose. BeastHttpTransport hides
+    # them behind a pimpl, so nothing downstream includes their headers and
+    # nothing downstream should have to link them.
+    Boost::beast
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
