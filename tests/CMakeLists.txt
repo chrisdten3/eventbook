@@ -5,8 +5,10 @@ include(Catch)
 # time actually becomes a problem, not before.
 add_executable(eventbook_tests
   unit/test_decimal.cpp
+  unit/test_identifiers.cpp
   unit/test_price.cpp
   unit/test_quantity.cpp
+  unit/test_time.cpp
   unit/test_version.cpp
 )
 

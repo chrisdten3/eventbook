@@ -6,6 +6,7 @@ add_library(eventbook_core
   common/decimal.cpp
   common/price.cpp
   common/quantity.cpp
+  common/time.cpp
   common/version.cpp
 )
 add_library(eventbook::core ALIAS eventbook_core)
