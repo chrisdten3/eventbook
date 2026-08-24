@@ -1,8 +1,9 @@
 # Data dictionary
 
-Status: **M0**. No datasets exist yet. This file is the contract that every
-recorded and derived field must be registered in before it is used in analysis.
-It is updated in the same change that introduces a field, never afterwards.
+Status: **M1**. Market metadata is registered below; no recorded or derived
+datasets exist yet. This file is the contract that every recorded and derived
+field must be registered in before it is used in analysis. It is updated in the
+same change that introduces a field, never afterwards.
 
 ## Conventions
 
@@ -11,21 +12,78 @@ It is updated in the same change that introduces a field, never afterwards.
 - **Quantity** is fixed-point. One `Quantity` unit = 0.01 contract.
 - Floating point is never the canonical representation of money or size. It
   appears only in derived statistics that are explicitly documented as such.
-- **Times** are `std::chrono` types. Every record carries both a local receive
-  timestamp and, when the venue supplies one, an exchange timestamp.
+- **Times** are `std::chrono` types at **microsecond** resolution. Not
+  nanoseconds: the venue publishes milliseconds (`ts_ms`), so microseconds lose
+  nothing the exchange actually sends, while nanoseconds would advertise
+  measurement precision this system does not have.
+- Every record carries both a local receive timestamp and, when the venue
+  supplies one, an exchange timestamp. They come from unsynchronized clocks and
+  are separate types (`LocalTimestamp`, `ExchangeTimestamp`) so that they cannot
+  be subtracted casually.
 - The difference between them is reported as an **observed timestamp
   difference**, not as one-way latency: clock offset and one-way delay cannot be
   separated from a single direction of measurement.
 - All book state is normalized onto the **YES price scale**. On the legacy
   two-price representation, `YES ask = $1.00 - best NO bid`.
 
+## Layer 0 - market metadata *(REST, M1)*
+
+Parsed by `parse_market` from `GET /trade-api/v2/markets`. Unknown JSON fields
+are ignored; the fields below are required unless marked optional.
+
+| Field | Type | Wire field | Notes |
+|---|---|---|---|
+| `ticker` | `MarketTicker` | `ticker` | One tradeable contract |
+| `event_ticker` | `EventTicker` | `event_ticker` | Partition unit for train/test splits |
+| `market_type` | string | `market_type` | `binary` for standard contracts |
+| `status` | `MarketStatus` | `status` | See status vocabulary below |
+| `price_level_structure` | string | `price_level_structure` | `linear_cent`, `deci_cent`, ... |
+| `price_ranges` | `vector<PriceRange>` | `price_ranges` | `{start, end, step}`; `step` is a `PriceDelta` |
+| `open_time` | `ExchangeTimestamp` | `open_time` | RFC 3339 |
+| `close_time` | `ExchangeTimestamp` | `close_time` | RFC 3339 |
+| `expected_expiration_time` | optional | `expected_expiration_time` | Nullable on the wire |
+| `mve_collection_ticker` | optional string | `mve_collection_ticker` | Present only on multivariate markets |
+| `yes_bid` / `yes_ask` | `Price` | `yes_bid_dollars` / `yes_ask_dollars` | Snapshot, **not** book state |
+| `yes_bid_size` / `yes_ask_size` | `Quantity` | `yes_bid_size_fp` / `yes_ask_size_fp` | Fractional: `"95.12"` is 9,512 units |
+| `last_price` | `Price` | `last_price_dollars` | Snapshot |
+| `volume` / `volume_24h` | `Quantity` | `volume_fp` / `volume_24h_fp` | |
+| `open_interest` | `Quantity` | `open_interest_fp` | |
+| `can_close_early` | bool | `can_close_early` | |
+
+The quote fields are a **snapshot taken when the request was served**, not an
+order book. They are for scouting a research universe by spread, depth, and
+activity. Book state comes from the WebSocket in M2 and never from here.
+
+### Status vocabulary
+
+The `status` **field** and the `status` **query parameter** use different
+vocabularies. Verified against the live API:
+
+| Query `status=` | Field `status` values |
+|---|---|
+| `unopened` | `initialized` |
+| `open` | `active` |
+| `closed` | `closed`, `determined` |
+| `settled` | `finalized` |
+
+`MarketStatusFilter` models the query side and `MarketStatus` the field side, so
+the two cannot be interchanged. An unrecognized field value parses to
+`MarketStatus::Unknown` rather than failing, so a new venue state does not stop
+a recorder; the eligibility filter rejects `Unknown` explicitly.
+
+### Price grid
+
+Tick size is per market and is read from `price_ranges`, never assumed.
+Observed live: `linear_cent` steps by `$0.0100` (100 `Price` units) and
+`deci_cent` by `$0.0010` (10 units).
+
 ## Layer 1 - raw journal record *(schema v0, not built yet)*
 
 | Field | Type | Notes |
 |---|---|---|
 | `journal_version` | uint16 | Schema version of this record |
-| `local_recv_ns` | int64 | Steady/system receive time, nanoseconds |
-| `exchange_ts` | optional int64 | Venue timestamp when present |
+| `local_recv_us` | int64 | Local wall-clock receive time, microseconds since epoch |
+| `exchange_ts_us` | optional int64 | Venue timestamp, microseconds since epoch |
 | `connection_id` | uint64 | Identifies one WebSocket session |
 | `stream_id` | optional string | Subscription/channel identifier |
 | `sequence` | optional uint64 | Venue sequence number when present |

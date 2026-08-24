@@ -5,6 +5,8 @@
 add_library(eventbook_core
   api/beast_http_transport.cpp
   api/http.cpp
+  api/market.cpp
+  api/market_query.cpp
   api/rest_client.cpp
   common/decimal.cpp
   common/price.cpp
@@ -41,6 +43,7 @@ target_link_libraries(eventbook_core
     # them behind a pimpl, so nothing downstream includes their headers and
     # nothing downstream should have to link them.
     Boost::beast
+    nlohmann_json::nlohmann_json
     OpenSSL::SSL
     OpenSSL::Crypto
 )

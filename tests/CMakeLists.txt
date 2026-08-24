@@ -6,6 +6,8 @@ include(Catch)
 add_executable(eventbook_tests
   unit/test_decimal.cpp
   unit/test_identifiers.cpp
+  unit/test_market.cpp
+  unit/test_market_query.cpp
   unit/test_price.cpp
   unit/test_quantity.cpp
   unit/test_rest_client.cpp
@@ -14,6 +16,11 @@ add_executable(eventbook_tests
 )
 
 target_include_directories(eventbook_tests PRIVATE support)
+
+# Fixtures are located by absolute path so the tests do not depend on whatever
+# working directory ctest happens to use.
+target_compile_definitions(eventbook_tests
+  PRIVATE EVENTBOOK_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 target_link_libraries(eventbook_tests
   PRIVATE
