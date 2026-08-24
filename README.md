@@ -137,17 +137,46 @@ cp config/example.yaml config/local.yaml
 
 Added only when a milestone needs them, each with a stated reason.
 
-| Package | Purpose | Added |
-|---|---|---|
-| `fmt` | Formatting | M0 |
-| `spdlog` | Structured logging | M0 |
-| `cli11` | Command-line parsing | M0 |
-| `catch2` | Test framework | M0 |
+| Package | Purpose | Scope | Added |
+|---|---|---|---|
+| `fmt` | Formatting | runtime | M0 |
+| `spdlog` | Structured logging | runtime | M0 |
+| `cli11` | Command-line parsing | runtime | M0 |
+| `catch2` | Test framework | test | M0 |
+| `openssl` | TLS 1.2/1.3 client | runtime | M1 |
+| `boost-beast` | HTTP/1.1 messages over Asio | runtime | M1 |
 
-Planned, deliberately **not** installed yet so the first build stays fast:
-`openssl` (TLS + RSA-PSS request signing, M1), `boost-beast` (HTTP/WebSocket,
-M1/M2), `simdjson` (high-volume parsing, M2), `zstd` (journal compression, M3),
-and a YAML library (M1).
+`openssl` is what makes an HTTPS conversation possible at all: Kalshi is
+TLS-only and sends HSTS. It replaces writing a TLS stack, which is not a thing
+anyone should do. It will also supply RSA-PSS SHA-256 signing when M2 needs
+authenticated WebSocket access — REST market data is public and needs none.
+
+`boost-beast` provides HTTP/1.1 framing (headers, chunked transfer, keep-alive)
+and, in M2, WebSocket framing. It replaces a hand-written HTTP parser, which is
+a well-known source of security bugs. libcurl would serve REST alone more
+simply, but has no WebSocket client, so the project would end up carrying two
+network stacks; Beast covers both against one Asio model. Verified that Kalshi
+negotiates HTTP/1.1 cleanly, since Beast does not speak HTTP/2.
+
+Both are **runtime-only** and neither appears in a public header —
+`BeastHttpTransport` hides them behind a pimpl, so they are linked `PRIVATE`
+and nothing downstream pays their compile cost. They do make the first vcpkg
+configure noticeably slower.
+
+Planned, deliberately **not** installed yet so the build stays fast:
+`nlohmann-json` (market metadata, M1), `simdjson` (high-volume parsing, M2),
+`zstd` (journal compression, M3), and a YAML library (M1).
+
+### Live smoke tests
+
+`ctest` never touches the network. The live tests are built but not registered
+with CTest, so an offline machine or a venue outage cannot turn into a red
+build. They are read-only, send no credentials, and cannot issue a write. Run
+them by hand:
+
+```bash
+./build/dev/bin/eventbook_live_tests
+```
 
 ## Milestones
 

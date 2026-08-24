@@ -24,6 +24,8 @@ include(EventBookWarnings)
 option(EVENTBOOK_BUILD_TESTS "Build the eventbook test suite" ON)
 
 find_package(fmt CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(boost_beast CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 

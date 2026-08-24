@@ -6,9 +6,11 @@
   "homepage": "https://github.com/chrisdten3/eventbook",
   "license": "MIT",
   "dependencies": [
+    "boost-beast",
+    "cli11",
     "fmt",
-    "spdlog",
-    "cli11"
+    "openssl",
+    "spdlog"
   ],
   "features": {
     "tests": {
