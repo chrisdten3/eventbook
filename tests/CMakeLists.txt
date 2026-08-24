@@ -4,6 +4,9 @@ include(Catch)
 # A single test binary keeps the feedback loop short. Split it only when link
 # time actually becomes a problem, not before.
 add_executable(eventbook_tests
+  unit/test_decimal.cpp
+  unit/test_price.cpp
+  unit/test_quantity.cpp
   unit/test_version.cpp
 )
 
