@@ -145,6 +145,7 @@ Added only when a milestone needs them, each with a stated reason.
 | `catch2` | Test framework | test | M0 |
 | `openssl` | TLS 1.2/1.3 client | runtime | M1 |
 | `boost-beast` | HTTP/1.1 messages over Asio | runtime | M1 |
+| `nlohmann-json` | Market metadata parsing | runtime | M1 |
 
 `openssl` is what makes an HTTPS conversation possible at all: Kalshi is
 TLS-only and sends HSTS. It replaces writing a TLS stack, which is not a thing
@@ -163,9 +164,15 @@ Both are **runtime-only** and neither appears in a public header —
 and nothing downstream pays their compile cost. They do make the first vcpkg
 configure noticeably slower.
 
+`nlohmann-json` handles market metadata: a few thousand objects parsed once at
+startup, where ergonomics matter more than throughput. It is deliberately *not*
+the parser for the M2 WebSocket feed, which is high-volume and gets `simdjson`.
+Two JSON libraries is a considered choice, not an oversight — AGENTS.md sets
+exactly this split.
+
 Planned, deliberately **not** installed yet so the build stays fast:
-`nlohmann-json` (market metadata, M1), `simdjson` (high-volume parsing, M2),
-`zstd` (journal compression, M3), and a YAML library (M1).
+`simdjson` (high-volume parsing, M2), `zstd` (journal compression, M3), and a
+YAML library (M1).
 
 ### Live smoke tests
 

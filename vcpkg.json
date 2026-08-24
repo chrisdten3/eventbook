@@ -9,6 +9,7 @@
     "boost-beast",
     "cli11",
     "fmt",
+    "nlohmann-json",
     "openssl",
     "spdlog"
   ],
