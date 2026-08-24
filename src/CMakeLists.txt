@@ -4,6 +4,7 @@
 # and offline replay (AGENTS.md, "One event model, two data sources").
 add_library(eventbook_core
   api/beast_http_transport.cpp
+  api/eligibility.cpp
   api/http.cpp
   api/market.cpp
   api/market_query.cpp

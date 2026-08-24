@@ -77,6 +77,42 @@ Tick size is per market and is read from `price_ranges`, never assumed.
 Observed live: `linear_cent` steps by `$0.0100` (100 `Price` units) and
 `deci_cent` by `$0.0010` (10 units).
 
+## Inclusion rule *(M1)*
+
+`EligibilityCriteria` is the frozen inclusion rule. It must be recorded with an
+experiment configuration and reported with any result derived from it.
+
+Exclusions divide in two, and the distinction governs reporting rather than
+execution.
+
+**Structural** — this software cannot faithfully represent the market. These
+are facts about the code, not choices, and are not configurable.
+
+| Reason | Rule |
+|---|---|
+| `Multivariate` | non-empty `mve_collection_ticker` |
+| `NotBinaryMarket` | `market_type != "binary"` |
+| `UnknownStatus` | `status` not recognized by this build |
+| `NoPriceGrid` | `price_ranges` empty |
+| `MalformedPriceGrid` | non-positive step, inverted band, or width not a whole number of ticks |
+| `PriceGridOutOfBounds` | band outside `[$0.0000, $1.0000]` |
+| `OverlappingPriceBands` | a price would sit on two tick grids at once |
+
+**Selection** — a decision about scope. Every one of these must be
+pre-registered and stated beside any finding.
+
+| Reason | Default |
+|---|---|
+| `StatusNotRequested` | `required_status = Active` |
+| `AlreadyClosed` | always applied |
+| `ClosesTooSoon` | `minimum_time_to_close = 1 hour` |
+| `InsufficientOpenInterest` | **0, i.e. disabled** |
+
+The open-interest gate defaults to off deliberately. Liquidity correlates with
+spread, depth, volatility, and the informativeness of order flow — everything
+the study measures. Raising it after seeing results is cherry-picking, so using
+it at all has to be a visible, justified act.
+
 ## Layer 1 - raw journal record *(schema v0, not built yet)*
 
 | Field | Type | Notes |
