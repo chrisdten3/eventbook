@@ -174,6 +174,34 @@ Planned, deliberately **not** installed yet so the build stays fast:
 `simdjson` (high-volume parsing, M2), `zstd` (journal compression, M3), and a
 YAML library (M1).
 
+## Describing the market universe
+
+`scout` is M1's deliverable: discover markets over REST, apply the frozen
+inclusion rule, and report both halves — what survived and what was excluded,
+with a reason for each.
+
+```bash
+./build/release/bin/scout --series KXFED --show-events 6
+```
+
+Observed against the live API:
+
+- **87 KXFED markets across only 6 events.** Sibling strikes on one FOMC
+  decision move together, so the independent sample size is 6, not 87. This is
+  why M5 partitions by event.
+- **Over 250,000 markets are open at once**, so an unscoped sweep hits the page
+  budget. That is the correct outcome, not a limitation: version one studies
+  one recurring series, and a truncated sweep of everything would be biased
+  toward whatever the venue lists first.
+- **The default listing is dominated by multivariate combo markets.**
+  `scout --series KXMVECROSSCATEGORY` returns 111 markets, 111 excluded,
+  0 eligible.
+
+Exclusions are split into **structural** (this software cannot represent the
+market) and **selection** (we chose not to study it). Only the second kind
+needs to be pre-registered and restated beside a result — which is why they are
+reported separately rather than as one number.
+
 ### Live smoke tests
 
 `ctest` never touches the network. The live tests are built but not registered
