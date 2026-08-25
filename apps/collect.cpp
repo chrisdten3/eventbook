@@ -8,6 +8,7 @@
 // Get and the session sends nothing except subscribe commands and protocol
 // pongs, so no code path here can place, amend, or cancel an order.
 
+#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 #include <CLI/CLI.hpp>
 
@@ -27,6 +28,8 @@
 #include "eventbook/book/market_state.hpp"
 #include "eventbook/book/order_book.hpp"
 #include "eventbook/common/version.hpp"
+#include "eventbook/data/journal.hpp"
+#include "eventbook/replay/replay.hpp"
 
 namespace {
 
@@ -63,6 +66,17 @@ int main(int argc, char** argv) {
                    "Skip a sequence number after N deltas, to prove gap detection. "
                    "Corrupts the local stream deliberately; never use while recording "
                    "data intended for research");
+
+    std::string journal_dir;
+    app.add_option("-j,--journal-dir", journal_dir,
+                   "Directory to record an immutable journal into. Without it nothing is "
+                   "written and the session cannot be replayed");
+
+    std::int64_t rotate_minutes{60};
+    app.add_option("--rotate-minutes", rotate_minutes, "Minutes before starting a new segment");
+
+    bool no_compress{false};
+    app.add_flag("--no-compress", no_compress, "Write plain JSONL instead of zstd");
 
     std::string log_level{"info"};
     app.add_option("--log-level", log_level, "trace|debug|info|warn|error");
@@ -116,12 +130,118 @@ int main(int argc, char** argv) {
     config.subscription.channels = {"orderbook_delta", "trade"};
     config.subscription.use_yes_price = !no_yes_price;
 
+    std::optional<JournalWriter> journal;
+    if (!journal_dir.empty()) {
+        JournalWriterConfig journal_config;
+        journal_config.compress = !no_compress;
+        journal_config.rotate_interval = std::chrono::minutes{rotate_minutes};
+        auto opened = JournalWriter::create(journal_dir, "collect-" + ticker, journal_config);
+        if (!opened) {
+            spdlog::error("cannot open journal: {} ({})", to_string(opened.error().kind),
+                          opened.error().detail);
+            return 1;
+        }
+        journal = *std::move(opened);
+        spdlog::info("journal: {}", journal->current_segment().string());
+    }
+
     WebSocketSession session{config, *std::move(signer)};
 
     // The same type the replay engine drives. Sharing it is what makes a
     // replayed session comparable to a live one rather than merely similar:
     // there is exactly one implementation of what an event does to the book.
     MarketState state{market, grid};
+
+    // The instant a message arrived, shared between the journal record and the
+    // live book so the two cannot disagree.
+    LocalTimestamp last_received_at{};
+
+    // Written before any market data, so a journal is self-describing: replay
+    // reads the price convention and grid from here rather than from a
+    // configuration file that happens to be sitting next to it.
+    if (journal) {
+        SessionMetadata metadata;
+        metadata.market_ticker = market;
+        metadata.price_convention = session.price_convention();
+        metadata.price_grid = grid;
+        metadata.build = eventbook::describe_build();
+
+        JournalRecord header;
+        header.kind = JournalRecordKind::SessionStarted;
+        header.local_receive_time = local_now();
+        header.message_type = "session_started";
+        header.market_ticker = market;
+        header.payload = encode_session_metadata(metadata);
+        if (const auto problem = journal->write(header)) {
+            spdlog::error("journal write failed: {}", to_string(problem->kind));
+        }
+    }
+
+    const auto journal_event = [&](JournalRecordKind kind, std::string_view type,
+                                   std::string_view payload) {
+        if (!journal) {
+            return;
+        }
+        JournalRecord record;
+        record.kind = kind;
+        record.local_receive_time = local_now();
+        record.connection_id = session.connection_id();
+        record.message_type = std::string{type};
+        record.market_ticker = market;
+        record.payload = std::string{payload};
+        if (const auto problem = journal->write(record)) {
+            spdlog::error("journal write failed: {}", to_string(problem->kind));
+        }
+    };
+
+    session.on_raw(
+        [&](std::string_view payload, LocalTimestamp received_at, const MarketEvent* event) {
+            // The event handler reuses this instant rather than reading the clock
+            // again. on_raw fires immediately before on_event for the same message,
+            // so this is the timestamp that lands in the journal -- and using it for
+            // the live book too is what makes live and replayed metrics identical
+            // rather than merely close.
+            last_received_at = received_at;
+            if (!journal) {
+                return;
+            }
+            JournalRecord record;
+            record.kind = JournalRecordKind::Message;
+            record.local_receive_time = received_at;
+            record.connection_id = session.connection_id();
+            record.payload = std::string{payload};
+
+            // Metadata is an index over the payload, never a replacement for it:
+            // replay re-derives all of this by parsing the bytes.
+            if (event != nullptr) {
+                if (const auto ticker_of = market_ticker_of(*event)) {
+                    record.market_ticker = *ticker_of;
+                }
+                record.sequence = sequence_of(*event);
+                record.message_type = std::visit(
+                    [](const auto& payload_kind) -> std::string {
+                        using Kind = std::decay_t<decltype(payload_kind)>;
+                        if constexpr (std::is_same_v<Kind, BookSnapshot>)
+                            return "orderbook_snapshot";
+                        else if constexpr (std::is_same_v<Kind, BookDelta>)
+                            return "orderbook_delta";
+                        else if constexpr (std::is_same_v<Kind, PublicTrade>)
+                            return "trade";
+                        else if constexpr (std::is_same_v<Kind, SubscriptionAck>)
+                            return "subscribed";
+                        else if constexpr (std::is_same_v<Kind, StreamError>)
+                            return "error";
+                        else
+                            return "unhandled";
+                    },
+                    *event);
+            } else {
+                record.message_type = "unparsed";
+            }
+            if (const auto problem = journal->write(record)) {
+                spdlog::error("journal write failed: {}", to_string(problem->kind));
+            }
+        });
 
     std::uint64_t delta_count{0};
     std::uint64_t sequence_shift{0};
@@ -144,7 +264,13 @@ int main(int argc, char** argv) {
                                       : std::string{"--"});
     };
 
-    session.on_notice([](WsSessionNotice notice, std::string_view detail) {
+    session.on_notice([&](WsSessionNotice notice, std::string_view detail) {
+        // A disconnection is journalled explicitly. Without it a reader cannot
+        // distinguish a quiet market from a period where we were simply absent,
+        // and those demand opposite conclusions.
+        if (notice == WsSessionNotice::Disconnected) {
+            journal_event(JournalRecordKind::ConnectionLost, "connection_lost", detail);
+        }
         if (notice == WsSessionNotice::ParseFailure) {
             spdlog::warn("parse failure: {}", detail.substr(0, 200));
         } else if (detail.empty()) {
@@ -155,10 +281,10 @@ int main(int argc, char** argv) {
     });
 
     session.on_event([&](const MarketEvent& event) {
-        // Live reads the clock here; replay passes the timestamp recorded in
-        // the journal. MarketState never reads a clock itself, which is what
-        // lets the two paths produce identical metrics.
-        const auto now = local_now();
+        // The timestamp recorded in the journal, not a fresh clock read. Replay
+        // feeds MarketState exactly this value, so the two paths cannot
+        // disagree about invalid_time or anything else derived from it.
+        const auto now = last_received_at;
 
         if (const auto* snapshot = std::get_if<BookSnapshot>(&event)) {
             sequence_shift = 0;
@@ -225,6 +351,29 @@ int main(int argc, char** argv) {
     const auto finished = local_now();
     state.finish(finished);
 
+    if (journal) {
+        // The closing record carries the counters, so a journal can be audited
+        // for completeness without re-deriving them.
+        JournalRecord footer;
+        footer.kind = JournalRecordKind::SessionEnded;
+        footer.local_receive_time = finished;
+        footer.connection_id = session.connection_id();
+        footer.message_type = "session_ended";
+        footer.market_ticker = market;
+        footer.payload = fmt::format(
+            R"({{"messages":{},"snapshots":{},"deltas":{},"trades":{},"gaps":{},)"
+            R"("rejected_deltas":{},"parse_failures":{},"final_state_hash":"{:016x}"}})",
+            session.stats().messages_received, state.stats().snapshots, state.stats().deltas,
+            state.stats().trades, state.stats().sequence_gaps, state.stats().rejected_deltas,
+            session.stats().parse_failures, state.state_hash());
+        if (const auto problem = journal->write(footer)) {
+            spdlog::error("journal write failed: {}", to_string(problem->kind));
+        }
+        if (const auto problem = journal->flush()) {
+            spdlog::error("journal flush failed: {}", to_string(problem->kind));
+        }
+    }
+
     const auto elapsed = finished - started;
     const double wall_seconds =
         std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
@@ -257,11 +406,26 @@ int main(int argc, char** argv) {
                  format_optional_price(state.book().best_bid()),
                  format_optional_price(state.book().best_ask()));
     spdlog::info("final state hash     {:016x}", state.state_hash());
+    if (journal) {
+        const auto& journal_stats = journal->stats();
+        spdlog::info("journal records      {}", journal_stats.records_written);
+        spdlog::info("journal segments     {}", journal_stats.segments_created);
+        spdlog::info("journal uncompressed {} bytes", journal_stats.uncompressed_bytes);
+        spdlog::info("journal on disk      {} bytes ({:.1f}x)", journal_stats.bytes_on_disk,
+                     journal_stats.bytes_on_disk > 0
+                         ? static_cast<double>(journal_stats.uncompressed_bytes) /
+                               static_cast<double>(journal_stats.bytes_on_disk)
+                         : 0.0);
+        spdlog::info("journal drops        {}", journal_stats.dropped_records);
+        spdlog::info("journal write errors {}", journal_stats.write_failures);
+    }
 
     // A session with unexplained drops is not usable for research, so say so
     // rather than leaving it to be noticed later.
+    const bool journal_clean =
+        !journal || (journal->stats().dropped_records == 0 && journal->stats().write_failures == 0);
     const bool clean = stats.parse_failures == 0 && market_stats.rejected_deltas == 0 &&
-                       market_stats.rejected_snapshots == 0;
+                       market_stats.rejected_snapshots == 0 && journal_clean;
     spdlog::info("data quality         {}", clean ? "clean" : "DEGRADED - see counters above");
     return 0;
 }

@@ -323,8 +323,17 @@ struct WebSocketSession::Impl {
         ++stats.messages_received;
         stats.bytes_received += bytes;
 
+        const auto received_at = local_now();
         const auto text = beast::buffers_to_string(buffer.data());
         auto event = parse_ws_message(text, convention());
+
+        // Raw first, always. A journal must hold what the venue sent before
+        // anything interprets it, and a payload that failed to parse is the one
+        // most worth keeping.
+        if (raw_handler) {
+            raw_handler(text, received_at, event ? &*event : nullptr);
+        }
+
         if (!event) {
             // Never silently discarded: counted, surfaced, and the raw text is
             // handed to the notice handler so a journal can keep it.
@@ -368,6 +377,7 @@ struct WebSocketSession::Impl {
     beast::flat_buffer buffer;
 
     WebSocketSession::EventHandler event_handler;
+    WebSocketSession::RawHandler raw_handler;
     WebSocketSession::NoticeHandler notice_handler;
     WsSessionStats stats;
 
@@ -384,6 +394,14 @@ WebSocketSession::~WebSocketSession() = default;
 
 void WebSocketSession::on_event(EventHandler handler) {
     impl_->event_handler = std::move(handler);
+}
+
+void WebSocketSession::on_raw(RawHandler handler) {
+    impl_->raw_handler = std::move(handler);
+}
+
+std::uint64_t WebSocketSession::connection_id() const {
+    return impl_->stats.connections;
 }
 
 void WebSocketSession::on_notice(NoticeHandler handler) {

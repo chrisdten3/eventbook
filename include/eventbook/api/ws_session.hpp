@@ -128,6 +128,17 @@ public:
     using EventHandler = std::function<void(const MarketEvent&)>;
     using NoticeHandler = std::function<void(WsSessionNotice, std::string_view)>;
 
+    /// Called for every frame, with the bytes exactly as they arrived and the
+    /// normalization result -- nullptr when the payload did not parse.
+    ///
+    /// Invoked BEFORE the event handler, so a journal records what the venue
+    /// sent before anything interprets it. AGENTS.md requires the raw payload
+    /// to be preserved before transformations precisely so that a parser bug is
+    /// fixable by replaying the journal; a payload that failed to parse is the
+    /// one most worth having kept, which is why this fires either way.
+    using RawHandler = std::function<void(std::string_view payload, LocalTimestamp received_at,
+                                          const MarketEvent* event)>;
+
     WebSocketSession(WsSessionConfig config, RequestSigner signer);
     ~WebSocketSession();
 
@@ -137,6 +148,7 @@ public:
     WebSocketSession& operator=(WebSocketSession&&) = delete;
 
     void on_event(EventHandler handler);
+    void on_raw(RawHandler handler);
     void on_notice(NoticeHandler handler);
 
     /// Run until stop() is called, the retry budget is exhausted, or the
@@ -158,6 +170,11 @@ public:
     void stop();
 
     [[nodiscard]] const WsSessionStats& stats() const;
+
+    /// How many connections this session has opened. Increments on every
+    /// reconnect, so a journal can record which records share an uninterrupted
+    /// stream -- and therefore which sequence numbers are comparable.
+    [[nodiscard]] std::uint64_t connection_id() const;
 
     /// The convention the session subscribed with, for feeding the normalizer.
     [[nodiscard]] PriceConvention price_convention() const;
