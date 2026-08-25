@@ -11,6 +11,7 @@ add_library(eventbook_core
   api/rest_client.cpp
   api/signing.cpp
   api/ws_protocol.cpp
+  api/ws_session.cpp
   book/order_book.cpp
   common/decimal.cpp
   common/price.cpp
