@@ -202,6 +202,33 @@ market) and **selection** (we chose not to study it). Only the second kind
 needs to be pre-registered and restated beside a result — which is why they are
 reported separately rather than as one number.
 
+## Credentials
+
+REST market data is public and needs none. The **WebSocket requires
+authentication even for public channels** — an anonymous connect returns
+`401 token_authentication_failure` — so M2 onward needs a Kalshi API key.
+
+Generate one in Kalshi account settings; you get a key ID and an RSA private
+key that is shown once and never again. Prefer the **demo** environment for
+development.
+
+```bash
+export EVENTBOOK_KALSHI_KEY_ID="your-key-id"
+export EVENTBOOK_KALSHI_KEY_PATH="$HOME/.config/eventbook/kalshi.pem"
+```
+
+The private key is referenced by **path**, never by value. An environment
+variable holding key material shows up in `ps`, in container inspection output,
+and in crash reports; a path leaks only a filename. `*.pem`, `*.key`, `.env`,
+and `config/local.yaml` are all git-ignored, and no test ever uses a real
+credential — the signing tests generate a throwaway key pair at run time.
+
+Requests are signed with RSA-PSS over SHA-256 (MGF1-SHA-256, salt length equal
+to the digest length), over the string `timestamp_ms + "GET" + path`. There is
+no way to sign anything but a `GET`: a valid signature is exactly what would
+make an order request acceptable to the venue, so the absence of a
+`sign_post()` is a stronger guarantee than the absence of a caller.
+
 ### Live smoke tests
 
 `ctest` never touches the network. The live tests are built but not registered

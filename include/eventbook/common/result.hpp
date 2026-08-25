@@ -72,6 +72,19 @@ public:
         return std::get<0>(storage_);
     }
 
+    /// Move the value out of an expiring Result.
+    ///
+    /// Needed for move-only payloads such as RsaPrivateKey: the const lvalue
+    /// overload above yields a const reference, which cannot bind to a move
+    /// constructor, so `*std::move(result)` is the only way to extract one.
+    /// std::expected carries the same overload for the same reason.
+    ///
+    /// Precondition: has_value().
+    [[nodiscard]] constexpr T&& operator*() && {
+        assert(has_value());
+        return std::get<0>(std::move(storage_));
+    }
+
     [[nodiscard]] constexpr const T* operator->() const {
         return &**this;
     }
