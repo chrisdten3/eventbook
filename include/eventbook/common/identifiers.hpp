@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -51,6 +52,31 @@ struct SeriesTicker {
     std::string value;
 
     [[nodiscard]] friend auto operator<=>(const SeriesTicker&, const SeriesTicker&) = default;
+};
+
+/// A venue sequence number, used to prove no message was missed.
+///
+/// Kalshi assigns these PER SUBSCRIPTION (per `sid`), starting at 1 and
+/// incrementing by 1. Two subscriptions on one connection therefore carry two
+/// independent sequences, and comparing across them is meaningless -- which is
+/// why gap detection has to be keyed by SubscriptionId rather than tracked as a
+/// single counter for the socket.
+struct SequenceNumber {
+    std::uint64_t value{};
+
+    [[nodiscard]] friend constexpr auto operator<=>(const SequenceNumber&,
+                                                    const SequenceNumber&) = default;
+};
+
+/// The `sid` the server assigns when it confirms a subscription.
+///
+/// Scoped to one connection: a reconnect issues new ones, so a SubscriptionId
+/// must never be persisted or compared across sessions.
+struct SubscriptionId {
+    std::int64_t value{};
+
+    [[nodiscard]] friend constexpr auto operator<=>(const SubscriptionId&,
+                                                    const SubscriptionId&) = default;
 };
 
 }  // namespace eventbook

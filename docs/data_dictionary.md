@@ -128,9 +128,69 @@ it at all has to be a visible, justified act.
 | `market_id` | optional string | |
 | `payload` | bytes | Exact bytes received, unmodified |
 
-## Layer 2 - normalized events *(not built yet)*
+## Layer 2 - normalized events *(M2)*
 
-Registered here as each variant alternative is implemented.
+`MarketEvent` is a `std::variant`. Every alternative below is produced by
+`parse_ws_message`; connection lifecycle and gap events are generated locally
+rather than parsed, and are registered when they are built.
+
+| Alternative | Produced by | Carries |
+|---|---|---|
+| `BookSnapshot` | `orderbook_snapshot` | ticker, sid, seq, bids, asks |
+| `BookDelta` | `orderbook_delta` | ticker, sid, seq, side, price, signed delta, exchange time |
+| `PublicTrade` | `trade` | ticker, sid, trade id, YES price, quantity, taker side, block flag, exchange time |
+| `SubscriptionAck` | `subscribed` | command id, channel, assigned sid |
+| `StreamError` | `error` | command id, code, message, optional ticker |
+| `UnhandledMessage` | any other `type` | the type string |
+
+An unrecognized `type` is an event, not a failure. The venue adds channels over
+time and a recorder that stopped on one would stop for no reason; the type is
+counted while the raw payload is journalled intact.
+
+### Everything is on the YES price scale
+
+Kalshi publishes no bid/ask pair. It publishes **YES bids** and **NO bids**, and
+a NO bid is economically an offer to sell YES: "buy NO at $0.30" and "sell YES
+at $0.70" are the same order.
+
+| Wire | Normalized |
+|---|---|
+| `yes_dollars_fp` entry | `BookSide::Bid` at the published price |
+| `no_dollars_fp` entry | `BookSide::Ask` at `$1.00 − published` |
+| delta `side: "yes"` | `BookSide::Bid` |
+| delta `side: "no"` | `BookSide::Ask`, price reflected |
+| taker bought `yes` | `TradeSide::BuyYes` |
+| taker bought `no` | `TradeSide::SellYes` |
+
+The conversion happens once, at the boundary. The book, feature engine, and
+simulator all work in YES dollars and never rediscover the rule.
+
+### The price convention is a required parameter
+
+`use_yes_price: true` asks the venue to report NO-side levels already on the YES
+scale. This is a **subscription-time decision the messages do not restate**, so
+`parse_ws_message` must be told which is in force.
+
+It cannot be inferred. `0.5400` is a legal price under either reading, so
+nothing in a message reveals a mistake — and the mistake is not small. On the
+documented snapshot example the best ask is **$0.44** under no-leg pricing and
+**$0.54** under yes-leg pricing, from identical bytes.
+
+The cheapest available check is that a correctly normalized two-sided book is
+not crossed.
+
+### Sequence numbers
+
+`seq` is **per subscription** (`sid`), starts at 1, and increments by 1. Two
+subscriptions on one connection carry two independent sequences, so gap
+detection is keyed by `SubscriptionId` and never as a single counter for the
+socket. Only `BookSnapshot` and `BookDelta` participate; `sequence_of` returns
+`nullopt` for everything else so acks and errors cannot be misread as gaps.
+
+**Open question for the live run:** whether `use_yes_price: true` keeps the
+field name `no_dollars_fp` while changing only the scale. That is the natural
+reading of the documentation, and both conventions are implemented and tested,
+but it has not been confirmed against a live socket.
 
 ## Layer 3 - derived research rows *(not built yet)*
 
