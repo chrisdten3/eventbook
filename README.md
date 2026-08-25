@@ -229,6 +229,41 @@ no way to sign anything but a `GET`: a valid signature is exactly what would
 make an order request acceptable to the venue, so the absence of a
 `sign_post()` is a stronger guarantee than the absence of a caller.
 
+## Recording a market
+
+`collect` reconstructs one market's order book from the live WebSocket and
+reports data-quality counters. Credentials required.
+
+```bash
+./build/release/bin/collect -m KXBTCD-26AUG2517-T79499.99 -d 1800 --report-every 300
+```
+
+M2's acceptance run, 30 minutes on a Bitcoin daily-threshold market:
+
+| | |
+|---|---|
+| elapsed | 1799.9s |
+| connections / reconnects | 1 / **0** |
+| messages | 35,988 (20.0/s), 9.57 MB |
+| snapshots / deltas / trades | 1 / 35,961 / 24 |
+| sequence gaps | 0 |
+| rejected deltas | 0 |
+| parse failures | 0 |
+| time with an invalid book | **0.000s** |
+| data quality | **clean** |
+
+One snapshot and 35,961 deltas applied without a single rejection means the
+sequence stayed consecutive for half an hour, every price sat on the market's
+tick grid, and no delta ever drove a level negative.
+
+Pick a market with actual activity first — `KXFED-27APR-T4.25` produced **zero**
+deltas in twelve seconds, so recording it would prove the socket stays open and
+nothing else.
+
+`--simulate-gap-after N` deliberately skips a sequence number to exercise gap
+detection against real traffic. It corrupts the local stream on purpose and must
+never be used while recording data intended for research.
+
 ### Live smoke tests
 
 `ctest` never touches the network. The live tests are built but not registered
@@ -245,8 +280,8 @@ them by hand:
 | # | Deliverable | Status |
 |---|---|---|
 | M0 | Repository and C++ foundation | **done** |
-| M1 | Domain types and REST market discovery | next |
-| M2 | One-market WebSocket vertical slice | |
+| M1 | Domain types and REST market discovery | **done** |
+| M2 | One-market WebSocket vertical slice | **done** |
 | M3 | Journal and deterministic replay | |
 | M4 | Feature dataset and descriptive research | |
 | M5 | Price-formation experiment | |

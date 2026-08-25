@@ -234,6 +234,14 @@ struct WebSocketSession::Impl {
     }
 
     void on_tls_ready() {
+        // Disarm the TCP-layer deadline before handing timing to the WebSocket
+        // layer. websocket::stream runs its own timeout system, and the
+        // expires_after() armed for the handshake stays live underneath it
+        // otherwise -- which closed a perfectly healthy connection every
+        // handshake_timeout seconds, on a market sending nine messages a
+        // second, for reasons that looked exactly like a network fault.
+        beast::get_lowest_layer(*stream).expires_never();
+
         // Beast's own timeouts replace a hand-rolled timer, and crucially they
         // treat control frames as traffic. Kalshi pings every 10 seconds, so a
         // market that trades nothing for minutes still looks alive -- which is
@@ -387,6 +395,25 @@ void WebSocketSession::run() {
     impl_->connect();
     impl_->io_context.run();
     impl_->notify(WsSessionNotice::Stopped);
+}
+
+void WebSocketSession::reconnect() {
+    // Posted so the teardown happens on the io_context's thread even when the
+    // request comes from inside an event handler, which is the normal case: the
+    // book invalidates while handling a delta and asks for a fresh snapshot.
+    asio::post(impl_->io_context, [impl = impl_.get()] {
+        if (impl->stopping) {
+            return;
+        }
+        // A requested reconnect is not a failure, so the backoff ladder starts
+        // over rather than inheriting a previous failure's delay.
+        impl->attempt = 0;
+        if (impl->stream) {
+            beast::error_code ec;
+            impl->stream->close(websocket::close_code::normal, ec);
+        }
+        impl->schedule_reconnect();
+    });
 }
 
 void WebSocketSession::stop() {

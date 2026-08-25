@@ -11,6 +11,7 @@ using eventbook::MarketParseErrorKind;
 using eventbook::MarketStatus;
 using eventbook::parse_market;
 using eventbook::parse_market_page;
+using eventbook::parse_market_response;
 using eventbook::Price;
 using eventbook::PriceDelta;
 using eventbook::Quantity;
@@ -207,4 +208,35 @@ TEST_CASE("malformed JSON is reported, not thrown") {
     REQUIRE_FALSE(missing.has_value());
     CHECK(missing.error().kind == MarketParseErrorKind::MissingField);
     CHECK(missing.error().field == "markets");
+}
+
+TEST_CASE("the single-market endpoint wraps its object") {
+    // GET /markets/{ticker} returns {"market": {...}} while the list endpoint
+    // returns the object bare. Handing this body to parse_market would fail on
+    // every required field at once, which is a confusing way to discover a
+    // shape difference.
+    const auto page = parse_market_page(read_fixture("markets_page1.json"));
+    REQUIRE(page.has_value());
+
+    const std::string wrapped =
+        R"({"market":{"ticker":"X-1","event_ticker":"X","market_type":"binary",)"
+        R"("status":"active","price_level_structure":"linear_cent",)"
+        R"("price_ranges":[{"start":"0.0000","end":"1.0000","step":"0.0100"}],)"
+        R"("open_time":"2026-01-01T00:00:00Z","close_time":"2026-02-01T00:00:00Z",)"
+        R"("yes_bid_dollars":"0.4000","yes_ask_dollars":"0.4200",)"
+        R"("yes_bid_size_fp":"10.00","yes_ask_size_fp":"20.00",)"
+        R"("last_price_dollars":"0.4100","volume_fp":"1.00","volume_24h_fp":"1.00",)"
+        R"("open_interest_fp":"1.00","can_close_early":true}})";
+
+    const auto market = parse_market_response(wrapped);
+    REQUIRE(market.has_value());
+    CHECK(market->ticker.value == "X-1");
+    CHECK(market->price_ranges.size() == 1);
+    CHECK(market->price_ranges[0].step == eventbook::PriceDelta{100});
+
+    // The wrapper is required, not optional.
+    const auto bare = parse_market_response(R"({"ticker":"X-1"})");
+    REQUIRE_FALSE(bare.has_value());
+    CHECK(bare.error().kind == MarketParseErrorKind::MissingField);
+    CHECK(bare.error().field == "market");
 }
