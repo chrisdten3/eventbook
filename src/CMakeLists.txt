@@ -19,6 +19,7 @@ add_library(eventbook_core
   common/time.cpp
   common/version.cpp
   data/events.cpp
+  data/journal.cpp
 )
 add_library(eventbook::core ALIAS eventbook_core)
 
