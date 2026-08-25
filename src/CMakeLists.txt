@@ -51,6 +51,7 @@ target_link_libraries(eventbook_core
     # nothing downstream should have to link them.
     Boost::beast
     nlohmann_json::nlohmann_json
+    $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
     OpenSSL::SSL
     OpenSSL::Crypto
 )
