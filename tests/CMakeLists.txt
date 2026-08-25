@@ -12,6 +12,7 @@ add_executable(eventbook_tests
   unit/test_price.cpp
   unit/test_quantity.cpp
   unit/test_rest_client.cpp
+  unit/test_signing.cpp
   unit/test_time.cpp
   unit/test_version.cpp
 )
@@ -29,6 +30,12 @@ target_link_libraries(eventbook_tests
     eventbook::warnings
     Catch2::Catch2WithMain
 )
+
+# The signing tests verify our signatures with raw OpenSSL rather than with our
+# own verifier, so the check runs against an independent implementation. Only
+# the headers are needed here: eventbook_core links OpenSSL PRIVATE, which
+# already places libcrypto on this target's link line.
+target_include_directories(eventbook_tests PRIVATE ${OPENSSL_INCLUDE_DIR})
 
 # Registers each TEST_CASE with CTest individually, so `ctest -R` can select one.
 catch_discover_tests(eventbook_tests)

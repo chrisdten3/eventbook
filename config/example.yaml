@@ -12,13 +12,16 @@
 environment: demo          # demo | production. Version one is read-only in both.
 
 rest:
-  # Verify the current host against https://docs.kalshi.com/ before relying on it.
-  base_url: "https://demo-api.kalshi.co/trade-api/v2"
+  # Hosts verified against the live API. Note that production is .com and demo
+  # is .co, and that the WebSocket lives on a different subdomain entirely.
+  # REST market data is public; the WebSocket requires authentication even for
+  # public channels (verified: anonymous connect returns 401).
+  base_url: "https://external-api.demo.kalshi.co/trade-api/v2"
   timeout_ms: 5000
   max_requests_per_second: 5   # stay under the documented rate limit
 
 websocket:
-  url: "wss://demo-api.kalshi.co/trade-api/ws/v2"
+  url: "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
   # Subscribe on the YES-price scale explicitly rather than relying on a future
   # default (AGENTS.md, "Prediction-market order-book conventions").
   use_yes_price: true

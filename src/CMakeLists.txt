@@ -9,6 +9,7 @@ add_library(eventbook_core
   api/market.cpp
   api/market_query.cpp
   api/rest_client.cpp
+  api/signing.cpp
   common/decimal.cpp
   common/price.cpp
   common/quantity.cpp
