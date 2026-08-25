@@ -95,13 +95,6 @@ struct EligibilityCriteria {
 /// must never be used for either.
 [[nodiscard]] ExchangeTimestamp assume_exchange_clock(LocalTimestamp local);
 
-/// Whether a price sits on a market's legal tick grid.
-///
-/// Lives here beside the grid validation because the order book needs exactly
-/// this in M2 to reject deltas at impossible prices, and reinventing it there
-/// would risk the two disagreeing.
-[[nodiscard]] bool is_on_price_grid(Price price, const std::vector<PriceRange>& ranges);
-
 /// Apply the inclusion rule to one market. Returns nullopt when it is eligible.
 [[nodiscard]] std::optional<IneligibilityReason> check_eligibility(
     const Market& market, const EligibilityCriteria& criteria, ExchangeTimestamp as_of);

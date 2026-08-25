@@ -32,15 +32,52 @@ number, message type, ticker, and a schema version.
 The point is recoverability: a parser bug or a feature bug is fixed by replaying
 the journal, never by re-collecting a market that has already closed.
 
-### 2. Normalized event layer *(not built yet)*
+### 2. Normalized event layer *(M2)*
 
 A `std::variant` over `BookSnapshot`, `BookDelta`, `PublicTrade`,
-`MarketStatusChange`, `MarketMetadataUpdate`, `ConnectionStarted`,
-`ConnectionLost`, and `GapDetected`.
+`SubscriptionAck`, `StreamError`, and `UnhandledMessage`. Connection lifecycle
+and gap events are generated locally rather than parsed, and join the variant
+when the session is built.
 
 A tagged union rather than a class hierarchy: the set of event types is closed
 and known, dispatch is exhaustive and checkable at compile time, and events stay
 cheap value types with no heap allocation or virtual dispatch.
+
+Everything here is on the **YES price scale**. The venue publishes YES bids and
+NO bids; a NO bid is an offer to sell YES, so it is reflected exactly once, at
+this boundary. See [data_dictionary.md](data_dictionary.md).
+
+### 2b. Order book *(M2)*
+
+`OrderBook` consumes normalized events and knows nothing about JSON, WebSocket
+framing, or REST market objects. That is what lets live collection and offline
+replay share one implementation.
+
+**Validity is binary and conservative.** A book is `AwaitingSnapshot` until its
+first snapshot and again after anything casts doubt on its state. While invalid,
+every derived quantity is unavailable rather than stale — a feature row computed
+from a half-known book is worse than no row at all.
+
+**Two kinds of rejection.** Some say the *message* was wrong and leave the book
+untouched: a message for another market, or a delta arriving with no snapshot to
+apply it to. Others say our *state* is wrong and invalidate: a sequence gap, a
+repeated sequence, a price off the market's tick grid, or a delta removing more
+size than the level holds. That last one is where `apply_delta` returning a
+`Result` pays off — the arithmetic reports that the transition is impossible,
+and the book decides that impossibility means desynchronization.
+
+**A snapshot is the only way back.** It deliberately does not check continuity
+with what came before, because recovering from a gap means accepting a
+discontinuity by definition.
+
+**A crossed book is reported, not rejected.** It should be impossible in a
+continuous market, but AGENTS.md warns against discarding crossed, locked, or
+transitioning states before checking them against lifecycle messages. Treating
+it as fatal would destroy the evidence needed to explain it.
+
+**`state_hash()` is the determinism handle.** FNV-1a over validity, sequence,
+and every level, in `std::map` key order so nothing incidental leaks in. M3's
+replay engine proves itself by replaying one event log twice and comparing.
 
 ### 3. Derived research layer *(not built yet)*
 

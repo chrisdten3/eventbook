@@ -38,24 +38,6 @@ enum class MarketStatus {
 [[nodiscard]] MarketStatus market_status_from_string(std::string_view text);
 [[nodiscard]] std::string_view to_string(MarketStatus status);
 
-/// One band of a market's legal price grid.
-///
-/// The venue publishes these per market, and the tick genuinely varies: a
-/// `linear_cent` market steps by $0.0100 while a `deci_cent` market steps by
-/// $0.0010, both observed live. This is why AGENTS.md forbids assuming a
-/// one-cent tick, and why Price stores $0.0001 units rather than ticks.
-///
-/// `step` is a PriceDelta, not a Price. A tick is the distance between two
-/// adjacent levels, not a level itself -- the same distinction that keeps
-/// implementation shortfall from being confused with a quote.
-struct PriceRange {
-    Price start;
-    Price end;
-    PriceDelta step;
-
-    [[nodiscard]] friend constexpr bool operator==(const PriceRange&, const PriceRange&) = default;
-};
-
 /// Metadata for one market, as returned by the REST market endpoints.
 ///
 /// The quote fields are a SNAPSHOT taken when the request was served, not a

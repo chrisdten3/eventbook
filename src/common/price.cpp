@@ -28,4 +28,16 @@ std::string format_price(Price price) {
     return format_scaled_decimal(price.units, Price::kFractionalDigits);
 }
 
+bool is_on_price_grid(Price price, const std::vector<PriceRange>& ranges) {
+    for (const auto& band : ranges) {
+        if (band.step.units <= 0 || price < band.start || price > band.end) {
+            continue;
+        }
+        if ((price.units - band.start.units) % band.step.units == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace eventbook

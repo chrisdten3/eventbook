@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "eventbook/common/decimal.hpp"
 
@@ -103,5 +104,34 @@ inline constexpr Price kMaxYesPrice{Price::kUnitsPerDollar};
 
 /// Render a Price in canonical wire form, always with four decimal places.
 [[nodiscard]] std::string format_price(Price price);
+
+/// One band of a market's legal price grid.
+///
+/// The venue publishes these per market, and the tick genuinely varies: across
+/// 4,000 live markets exactly two grids exist, `linear_cent` stepping $0.0100
+/// and `deci_cent` stepping $0.0010, in a near-even split. This is why
+/// AGENTS.md forbids assuming a one-cent tick and why Price stores $0.0001
+/// units rather than ticks.
+///
+/// `step` is a PriceDelta, not a Price: a tick is the distance between two
+/// adjacent levels, not a level itself.
+///
+/// This lives beside Price rather than beside the REST market model because
+/// two unrelated subsystems need it -- market eligibility and the order book --
+/// and an order book has no business including a REST response type.
+struct PriceRange {
+    Price start;
+    Price end;
+    PriceDelta step;
+
+    [[nodiscard]] friend constexpr bool operator==(const PriceRange&, const PriceRange&) = default;
+};
+
+/// Whether a price sits on a market's legal tick grid.
+///
+/// A price outside every band, or inside one but off its step, is not a price
+/// the venue can quote. The order book uses this to reject deltas at impossible
+/// prices, which is one of the two ways a desynchronized feed reveals itself.
+[[nodiscard]] bool is_on_price_grid(Price price, const std::vector<PriceRange>& ranges);
 
 }  // namespace eventbook

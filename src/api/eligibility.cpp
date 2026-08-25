@@ -102,18 +102,6 @@ ExchangeTimestamp assume_exchange_clock(LocalTimestamp local) {
     return ExchangeTimestamp{local.value};
 }
 
-bool is_on_price_grid(Price price, const std::vector<PriceRange>& ranges) {
-    for (const auto& band : ranges) {
-        if (band.step.units <= 0 || price < band.start || price > band.end) {
-            continue;
-        }
-        if ((price.units - band.start.units) % band.step.units == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::optional<IneligibilityReason> check_eligibility(const Market& market,
                                                      const EligibilityCriteria& criteria,
                                                      ExchangeTimestamp as_of) {
