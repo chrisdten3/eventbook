@@ -12,6 +12,7 @@ add_library(eventbook_core
   api/signing.cpp
   api/ws_protocol.cpp
   api/ws_session.cpp
+  book/market_state.cpp
   book/order_book.cpp
   common/decimal.cpp
   common/price.cpp
@@ -20,6 +21,7 @@ add_library(eventbook_core
   common/version.cpp
   data/events.cpp
   data/journal.cpp
+  replay/replay.cpp
 )
 add_library(eventbook::core ALIAS eventbook_core)
 

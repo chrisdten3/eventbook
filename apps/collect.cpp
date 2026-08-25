@@ -24,6 +24,7 @@
 #include "eventbook/api/rest_client.hpp"
 #include "eventbook/api/signing.hpp"
 #include "eventbook/api/ws_session.hpp"
+#include "eventbook/book/market_state.hpp"
 #include "eventbook/book/order_book.hpp"
 #include "eventbook/common/version.hpp"
 
@@ -34,22 +35,6 @@ using namespace eventbook;
 std::string format_optional_price(const std::optional<Price>& price) {
     return price.has_value() ? format_price(*price) : std::string{"--"};
 }
-
-/// Everything the run needs to report afterwards.
-///
-/// AGENTS.md requires per-session counts of gaps, snapshot refreshes, parse
-/// failures, and time spent with an invalid book. A session whose drops are
-/// unaccounted for is not usable for research, so these are first-class output
-/// rather than log noise.
-struct RunCounters {
-    std::uint64_t snapshots{};
-    std::uint64_t deltas{};
-    std::uint64_t trades{};
-    std::uint64_t gaps{};
-    std::uint64_t rejected_deltas{};
-    std::uint64_t crossed_observations{};
-    std::chrono::microseconds invalid_time{0};
-};
 
 }  // namespace
 
@@ -132,16 +117,32 @@ int main(int argc, char** argv) {
     config.subscription.use_yes_price = !no_yes_price;
 
     WebSocketSession session{config, *std::move(signer)};
-    OrderBook book{market, grid};
-    RunCounters counters;
+
+    // The same type the replay engine drives. Sharing it is what makes a
+    // replayed session comparable to a live one rather than merely similar:
+    // there is exactly one implementation of what an event does to the book.
+    MarketState state{market, grid};
 
     std::uint64_t delta_count{0};
     std::uint64_t sequence_shift{0};
     bool recovery_requested{false};
-    std::optional<LocalTimestamp> invalid_since;
 
     const auto started = local_now();
     auto last_report = started;
+
+    const auto report_if_due = [&](LocalTimestamp now) {
+        if (report_every <= 0 || now - last_report < std::chrono::seconds{report_every}) {
+            return;
+        }
+        last_report = now;
+        const auto& book = state.book();
+        spdlog::info(
+            "book {:<7} bid {:>7} x {:<10} ask {:>7} x {:<10} spread {}", to_string(book.status()),
+            format_optional_price(book.best_bid()), format_quantity(book.depth(BookSide::Bid, 1)),
+            format_optional_price(book.best_ask()), format_quantity(book.depth(BookSide::Ask, 1)),
+            book.spread().has_value() ? format_price(Price{book.spread()->units})
+                                      : std::string{"--"});
+    };
 
     session.on_notice([](WsSessionNotice notice, std::string_view detail) {
         if (notice == WsSessionNotice::ParseFailure) {
@@ -154,79 +155,55 @@ int main(int argc, char** argv) {
     });
 
     session.on_event([&](const MarketEvent& event) {
+        // Live reads the clock here; replay passes the timestamp recorded in
+        // the journal. MarketState never reads a clock itself, which is what
+        // lets the two paths produce identical metrics.
         const auto now = local_now();
 
         if (const auto* snapshot = std::get_if<BookSnapshot>(&event)) {
-            ++counters.snapshots;
-            // A snapshot re-bases the local sequence, so any deliberate shift
-            // applied earlier is discarded with it.
             sequence_shift = 0;
             recovery_requested = false;
-            if (const auto rejection = book.apply(*snapshot)) {
-                spdlog::error("snapshot rejected: {}", to_string(*rejection));
-            } else {
-                spdlog::info("snapshot: {} bid level(s), {} ask level(s)",
-                             book.level_count(BookSide::Bid), book.level_count(BookSide::Ask));
-            }
+            (void)snapshot;
         } else if (const auto* delta = std::get_if<BookDelta>(&event)) {
-            ++counters.deltas;
             ++delta_count;
-
-            BookDelta adjusted = *delta;
-            // Deliberate corruption, entirely local: skip one sequence number so
-            // the book sees a hole that the venue never sent. This proves gap
-            // detection on real traffic without needing the venue to misbehave,
-            // and every later delta keeps the same shift so the stream stays
-            // self-consistent after the single induced break.
             if (simulate_gap_after > 0 &&
                 delta_count == static_cast<std::uint64_t>(simulate_gap_after)) {
+                // Deliberate corruption, entirely local: skip one sequence
+                // number so the book sees a hole the venue never sent. Proves
+                // gap detection against real traffic without needing the venue
+                // to misbehave.
                 sequence_shift = 1;
                 spdlog::warn("injecting a simulated sequence gap after {} deltas", delta_count);
             }
-            adjusted.sequence = SequenceNumber{delta->sequence.value + sequence_shift};
-
-            if (const auto rejection = book.apply(adjusted)) {
-                ++counters.rejected_deltas;
-                if (*rejection == BookRejection::SequenceGap) {
-                    ++counters.gaps;
+            if (sequence_shift != 0) {
+                BookDelta adjusted = *delta;
+                adjusted.sequence = SequenceNumber{delta->sequence.value + sequence_shift};
+                if (const auto rejection = state.apply(MarketEvent{adjusted}, now)) {
+                    spdlog::warn("delta rejected: {} (book now {})", to_string(*rejection),
+                                 to_string(state.book().status()));
+                    if (invalidates_book(*rejection) && !recovery_requested) {
+                        recovery_requested = true;
+                        spdlog::warn("requesting a fresh snapshot");
+                        session.reconnect();
+                    }
                 }
-                spdlog::warn("delta rejected: {} (book now {})", to_string(*rejection),
-                             to_string(book.status()));
-                // A snapshot is the only way back, so ask for one immediately
-                // rather than discarding deltas until something else happens to
-                // reconnect us.
-                if (invalidates_book(*rejection) && !recovery_requested) {
-                    recovery_requested = true;
-                    spdlog::warn("requesting a fresh snapshot");
-                    session.reconnect();
-                }
+                report_if_due(now);
+                return;
             }
-        } else if (std::holds_alternative<PublicTrade>(event)) {
-            ++counters.trades;
         }
 
-        // Time spent with an unusable book is a data-quality figure AGENTS.md
-        // asks for by name, so it is measured rather than estimated.
-        if (!book.is_valid() && !invalid_since.has_value()) {
-            invalid_since = now;
-        } else if (book.is_valid() && invalid_since.has_value()) {
-            counters.invalid_time += now - *invalid_since;
-            invalid_since.reset();
+        if (const auto rejection = state.apply(event, now)) {
+            spdlog::warn("delta rejected: {} (book now {})", to_string(*rejection),
+                         to_string(state.book().status()));
+            // A snapshot is the only way back, so ask for one immediately
+            // rather than discarding deltas until something else reconnects us.
+            if (invalidates_book(*rejection) && !recovery_requested) {
+                recovery_requested = true;
+                spdlog::warn("requesting a fresh snapshot");
+                session.reconnect();
+            }
         }
-        if (book.is_crossed()) {
-            ++counters.crossed_observations;
-        }
-
-        if (report_every > 0 && now - last_report >= std::chrono::seconds{report_every}) {
-            last_report = now;
-            spdlog::info("book {:<7} bid {:>7} x {:<10} ask {:>7} x {:<10} spread {}",
-                         to_string(book.status()), format_optional_price(book.best_bid()),
-                         format_quantity(book.depth(BookSide::Bid, 1)),
-                         format_optional_price(book.best_ask()),
-                         format_quantity(book.depth(BookSide::Ask, 1)),
-                         book.spread().has_value() ? format_price(Price{book.spread()->units})
-                                                   : std::string{"--"});
-        }
+        report_if_due(now);
     });
 
     std::thread deadline;
@@ -245,14 +222,14 @@ int main(int argc, char** argv) {
         deadline.join();
     }
 
-    if (invalid_since.has_value()) {
-        counters.invalid_time += local_now() - *invalid_since;
-    }
+    const auto finished = local_now();
+    state.finish(finished);
 
-    const auto elapsed = local_now() - started;
+    const auto elapsed = finished - started;
     const double wall_seconds =
         std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
     const auto& stats = session.stats();
+    const auto& market_stats = state.stats();
 
     spdlog::info("--- session report ---");
     spdlog::info("elapsed              {:.1f}s", wall_seconds);
@@ -262,24 +239,29 @@ int main(int argc, char** argv) {
         "messages             {} ({:.1f}/s)", stats.messages_received,
         wall_seconds > 0 ? static_cast<double>(stats.messages_received) / wall_seconds : 0.0);
     spdlog::info("bytes                {}", stats.bytes_received);
-    spdlog::info("snapshots            {}", counters.snapshots);
-    spdlog::info("deltas               {}", counters.deltas);
-    spdlog::info("trades               {}", counters.trades);
-    spdlog::info("sequence gaps        {}", counters.gaps);
-    spdlog::info("rejected deltas      {}", counters.rejected_deltas);
+    spdlog::info("snapshots            {}", market_stats.snapshots);
+    spdlog::info("deltas               {}", market_stats.deltas);
+    spdlog::info("trades               {}", market_stats.trades);
+    spdlog::info("sequence gaps        {}", market_stats.sequence_gaps);
+    spdlog::info("rejected deltas      {}", market_stats.rejected_deltas);
+    spdlog::info("rejected snapshots   {}", market_stats.rejected_snapshots);
     spdlog::info("parse failures       {}", stats.parse_failures);
-    spdlog::info("unhandled messages   {}", stats.unhandled_messages);
-    spdlog::info("stream errors        {}", stats.stream_errors);
-    spdlog::info("crossed observations {}", counters.crossed_observations);
+    spdlog::info("unhandled messages   {}", market_stats.unhandled_messages);
+    spdlog::info("stream errors        {}", market_stats.stream_errors);
+    spdlog::info("crossed observations {}", market_stats.crossed_observations);
     spdlog::info(
         "invalid book time    {:.3f}s",
-        std::chrono::duration_cast<std::chrono::duration<double>>(counters.invalid_time).count());
-    spdlog::info("final book           {} bid {} ask {}", to_string(book.status()),
-                 format_optional_price(book.best_bid()), format_optional_price(book.best_ask()));
+        std::chrono::duration_cast<std::chrono::duration<double>>(market_stats.invalid_time)
+            .count());
+    spdlog::info("final book           {} bid {} ask {}", to_string(state.book().status()),
+                 format_optional_price(state.book().best_bid()),
+                 format_optional_price(state.book().best_ask()));
+    spdlog::info("final state hash     {:016x}", state.state_hash());
 
     // A session with unexplained drops is not usable for research, so say so
     // rather than leaving it to be noticed later.
-    const bool clean = stats.parse_failures == 0 && counters.rejected_deltas == 0;
+    const bool clean = stats.parse_failures == 0 && market_stats.rejected_deltas == 0 &&
+                       market_stats.rejected_snapshots == 0;
     spdlog::info("data quality         {}", clean ? "clean" : "DEGRADED - see counters above");
     return 0;
 }
