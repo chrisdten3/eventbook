@@ -13,6 +13,7 @@ add_executable(eventbook_tests
   unit/test_quantity.cpp
   unit/test_rest_client.cpp
   unit/test_signing.cpp
+  unit/test_ws_protocol.cpp
   unit/test_time.cpp
   unit/test_version.cpp
 )

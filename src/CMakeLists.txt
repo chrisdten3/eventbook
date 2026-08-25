@@ -10,11 +10,13 @@ add_library(eventbook_core
   api/market_query.cpp
   api/rest_client.cpp
   api/signing.cpp
+  api/ws_protocol.cpp
   common/decimal.cpp
   common/price.cpp
   common/quantity.cpp
   common/time.cpp
   common/version.cpp
+  data/events.cpp
 )
 add_library(eventbook::core ALIAS eventbook_core)
 

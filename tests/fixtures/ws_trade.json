@@ -1,0 +1,17 @@
+{
+  "type": "trade",
+  "sid": 3,
+  "msg": {
+    "trade_id": "3c5b1d6e-1f2a-4d33-9b0e-2c7f8a4e5d61",
+    "market_ticker": "FED-23DEC-T3.00",
+    "yes_price_dollars": "0.6700",
+    "no_price_dollars": "0.3300",
+    "count_fp": "54.00",
+    "taker_side": "yes",
+    "taker_outcome_side": "yes",
+    "taker_book_side": "bid",
+    "is_block_trade": false,
+    "ts": "2022-11-22T20:44:01Z",
+    "ts_ms": 1669149841000
+  }
+}
