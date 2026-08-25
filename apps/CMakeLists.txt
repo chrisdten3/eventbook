@@ -20,3 +20,13 @@ target_link_libraries(scout
     CLI11::CLI11
     spdlog::spdlog
 )
+
+add_executable(replay replay.cpp)
+
+target_link_libraries(replay
+  PRIVATE
+    eventbook::core
+    eventbook::warnings
+    CLI11::CLI11
+    spdlog::spdlog
+)
