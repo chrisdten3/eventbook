@@ -15,6 +15,7 @@ add_executable(eventbook_tests
   unit/test_rest_client.cpp
   unit/test_signing.cpp
   unit/test_ws_protocol.cpp
+  unit/test_ws_session.cpp
   unit/test_time.cpp
   unit/test_version.cpp
 )
@@ -56,3 +57,6 @@ target_link_libraries(eventbook_live_tests
     eventbook::warnings
     Catch2::Catch2WithMain
 )
+
+# The bad-signature test generates a throwaway key pair, same as the unit tests.
+target_include_directories(eventbook_live_tests PRIVATE support ${OPENSSL_INCLUDE_DIR})
