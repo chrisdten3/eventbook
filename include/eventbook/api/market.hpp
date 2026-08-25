@@ -129,4 +129,11 @@ struct MarketPage {
 /// Parse a `{"markets": [...], "cursor": "..."}` response body.
 [[nodiscard]] Result<MarketPage, MarketParseError> parse_market_page(std::string_view json_text);
 
+/// Parse a `{"market": {...}}` body, as returned by GET /markets/{ticker}.
+///
+/// A different shape from the list endpoint: the single-market response wraps
+/// the object rather than returning it bare, so handing this body to
+/// parse_market would fail on every field at once.
+[[nodiscard]] Result<Market, MarketParseError> parse_market_response(std::string_view json_text);
+
 }  // namespace eventbook

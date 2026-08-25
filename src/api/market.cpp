@@ -258,6 +258,21 @@ Result<Market, MarketParseError> parse_market(std::string_view json_text) {
     return read_market(document);
 }
 
+Result<Market, MarketParseError> parse_market_response(std::string_view json_text) {
+    const auto document = json::parse(json_text, nullptr, /*allow_exceptions=*/false);
+    if (document.is_discarded()) {
+        return Failure{MarketParseError{MarketParseErrorKind::MalformedJson, ""}};
+    }
+    if (!document.is_object()) {
+        return Failure{MarketParseError{MarketParseErrorKind::NotAnObject, ""}};
+    }
+    const auto market = document.find("market");
+    if (market == document.end()) {
+        return Failure{MarketParseError{MarketParseErrorKind::MissingField, "market"}};
+    }
+    return read_market(*market);
+}
+
 Result<MarketPage, MarketParseError> parse_market_page(std::string_view json_text) {
     const auto document = json::parse(json_text, nullptr, /*allow_exceptions=*/false);
     if (document.is_discarded()) {

@@ -143,6 +143,16 @@ public:
     /// process is interrupted. Blocks the calling thread.
     void run();
 
+    /// Drop the connection and establish a new one, which re-subscribes and
+    /// yields a fresh snapshot.
+    ///
+    /// This is the recovery path for a book that has gone invalid. A snapshot
+    /// is the only way back -- the book refuses deltas until one arrives -- and
+    /// without an explicit request the only thing that would eventually deliver
+    /// one is an idle timeout, which is recovery by accident rather than by
+    /// design. Safe to call from inside an event handler.
+    void reconnect();
+
     /// Ask the session to shut down. Safe to call from a signal handler context
     /// or from inside an event handler.
     void stop();
