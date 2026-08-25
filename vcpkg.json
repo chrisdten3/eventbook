@@ -11,7 +11,8 @@
     "fmt",
     "nlohmann-json",
     "openssl",
-    "spdlog"
+    "spdlog",
+    "zstd"
   ],
   "features": {
     "tests": {

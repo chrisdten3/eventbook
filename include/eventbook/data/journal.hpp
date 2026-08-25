@@ -1,11 +1,13 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "eventbook/common/identifiers.hpp"
 #include "eventbook/common/result.hpp"
@@ -77,6 +79,8 @@ enum class JournalErrorKind {
     MalformedRecord,
     UnsupportedVersion,
     MissingField,
+    CompressionFailed,
+    DecompressionFailed,
 };
 
 [[nodiscard]] std::string_view to_string(JournalErrorKind kind);
@@ -95,23 +99,62 @@ struct JournalError {
 /// counted rather than logged and forgotten.
 struct JournalWriterStats {
     std::uint64_t records_written{};
-    std::uint64_t bytes_written{};
+    std::uint64_t uncompressed_bytes{};
+    std::uint64_t bytes_on_disk{};
     std::uint64_t write_failures{};
     std::uint64_t dropped_records{};
+    std::uint64_t segments_created{};
 };
 
 struct JournalWriterConfig {
-    /// Flush to the operating system every N records. Buffering is what keeps a
-    /// 20-message-per-second feed from issuing a syscall per message; flushing
-    /// periodically is what bounds how much a crash can cost.
+    /// Flush every N records, and -- when compressing -- end a zstd frame.
+    ///
+    /// Buffering keeps a 20-message-per-second feed from issuing a syscall per
+    /// message; flushing periodically bounds what a crash can cost.
     std::uint64_t flush_every{256};
+
+    /// Rotate after this many UNCOMPRESSED bytes in the current segment.
+    ///
+    /// Measured uncompressed because that is the figure a caller can reason
+    /// about: compressed size depends on how repetitive the market happened to
+    /// be, which an operator cannot predict or configure against.
+    std::uint64_t rotate_bytes{256ULL * 1024 * 1024};
+
+    /// Rotate on the wall clock as well as on size, so a crash costs at most
+    /// one segment even on a quiet market that would take days to fill one.
+    std::chrono::minutes rotate_interval{60};
+
+    bool compress{true};
+
+    /// zstd's own default: most of the achievable ratio at a fraction of the
+    /// CPU of higher levels. Nothing here is CPU-bound, and nothing here
+    /// benefits from spending more either.
+    int compression_level{3};
+
+    /// fsync a segment when it is closed. Closing hands data to the operating
+    /// system; only fsync survives power loss. Done at rotation rather than per
+    /// record, because per-record fsync would turn a 5 KB/s workload into a
+    /// disk-bound one for durability nobody asked for.
+    bool fsync_on_rotate{true};
 };
 
-/// Append-only writer for a versioned JSONL journal.
+/// Append-only writer producing rotating, optionally compressed JSONL segments.
+///
+/// Segments are named `<prefix>-<UTC stamp>.jsonl[.zst]`, which sorts
+/// lexicographically into chronological order -- so a reader can process a
+/// directory correctly without parsing any filename.
+///
+/// When compressing, each flush batch is written as its OWN complete zstd
+/// frame. Concatenated frames are valid zstd, so the file still decompresses
+/// with any standard tool, and a crash costs at most the final incomplete frame
+/// rather than corrupting everything after the failure point. That robustness
+/// costs a little ratio, since each frame rebuilds its own context -- a trade
+/// worth making for an append-only log whose purpose is surviving crashes.
 class JournalWriter {
 public:
     [[nodiscard]] static Result<JournalWriter, JournalError> create(
-        const std::filesystem::path& path, JournalWriterConfig config = {});
+        const std::filesystem::path& directory, std::string prefix,
+        JournalWriterConfig config = {});
 
     ~JournalWriter();
     JournalWriter(JournalWriter&&) noexcept;
@@ -125,6 +168,12 @@ public:
     [[nodiscard]] std::optional<JournalError> write(const JournalRecord& record);
 
     [[nodiscard]] std::optional<JournalError> flush();
+
+    /// Close the current segment and start a new one. Called automatically when
+    /// a rotation trigger fires; exposed so a caller can force a boundary.
+    [[nodiscard]] std::optional<JournalError> rotate();
+
+    [[nodiscard]] const std::filesystem::path& current_segment() const;
 
     [[nodiscard]] const JournalWriterStats& stats() const;
 
@@ -156,11 +205,23 @@ public:
 
     [[nodiscard]] std::uint64_t line_number() const;
 
+    /// Whether this reader is decompressing. Detected from the file's magic
+    /// bytes rather than its extension, so a renamed segment still reads.
+    [[nodiscard]] bool is_compressed() const;
+
 private:
     struct Impl;
     explicit JournalReader(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
 };
+
+/// Journal segments in a directory, in chronological order.
+///
+/// Order comes from the filename stamp, which sorts correctly as text. Files
+/// that do not look like segments are ignored rather than treated as errors: a
+/// data directory legitimately accumulates other things.
+[[nodiscard]] std::vector<std::filesystem::path> list_journal_segments(
+    const std::filesystem::path& directory, std::string_view prefix = {});
 
 /// Serialize one record to its JSONL line, without the trailing newline.
 /// Exposed so the format can be tested directly rather than only round-tripped.

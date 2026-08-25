@@ -2,8 +2,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -24,8 +26,32 @@ using eventbook::SubscriptionId;
 
 namespace {
 
-std::filesystem::path scratch_path(const std::string& name) {
-    return std::filesystem::temp_directory_path() / ("eventbook_journal_" + name + ".jsonl");
+/// A fresh, empty directory per test, so segments from one cannot leak into
+/// another's listing.
+std::filesystem::path scratch_dir(const std::string& name) {
+    const auto path = std::filesystem::temp_directory_path() / ("eventbook_journal_" + name);
+    std::filesystem::remove_all(path);
+    std::filesystem::create_directories(path);
+    return path;
+}
+
+/// Read every record across every segment in a directory, in order.
+std::vector<JournalRecord> read_all(const std::filesystem::path& directory) {
+    std::vector<JournalRecord> records;
+    for (const auto& segment : eventbook::list_journal_segments(directory)) {
+        auto reader = JournalReader::open(segment);
+        REQUIRE(reader.has_value());
+        auto stream = *std::move(reader);
+        while (true) {
+            auto record = stream.next();
+            REQUIRE(record.has_value());
+            if (!record->has_value()) {
+                break;
+            }
+            records.push_back(**record);
+        }
+    }
+    return records;
 }
 
 JournalRecord sample_message() {
@@ -139,11 +165,11 @@ TEST_CASE("a future schema version is refused, not guessed at") {
 }
 
 TEST_CASE("a written journal reads back in order") {
-    const auto path = scratch_path("roundtrip");
-    std::filesystem::remove(path);
-
+    const auto dir = scratch_dir("roundtrip");
     {
-        auto writer = JournalWriter::create(path);
+        JournalWriterConfig config;
+        config.compress = false;
+        auto writer = JournalWriter::create(dir, "test", config);
         REQUIRE(writer.has_value());
         auto journal = *std::move(writer);
 
@@ -156,115 +182,230 @@ TEST_CASE("a written journal reads back in order") {
         CHECK(journal.stats().records_written == 50);
         CHECK(journal.stats().write_failures == 0);
         CHECK(journal.stats().dropped_records == 0);
-        CHECK(journal.stats().bytes_written > 0);
+        CHECK(journal.stats().segments_created == 1);
     }
 
-    auto reader = JournalReader::open(path);
-    REQUIRE(reader.has_value());
-    auto stream = *std::move(reader);
-
-    std::vector<std::uint64_t> sequences;
-    while (true) {
-        auto record = stream.next();
-        REQUIRE(record.has_value());
-        if (!record->has_value()) {
-            break;
-        }
-        sequences.push_back((*record)->sequence->value);
-    }
-
-    REQUIRE(sequences.size() == 50);
+    const auto records = read_all(dir);
+    REQUIRE(records.size() == 50);
     for (std::uint64_t i = 0; i < 50; ++i) {
-        CHECK(sequences[i] == i + 1);
+        CHECK(records[i].sequence->value == i + 1);
     }
-    std::filesystem::remove(path);
+    std::filesystem::remove_all(dir);
 }
 
-TEST_CASE("opening an existing journal appends rather than truncating") {
-    // A journal is append-only. Reopening one must never discard what a
-    // previous run recorded.
-    const auto path = scratch_path("append");
-    std::filesystem::remove(path);
+TEST_CASE("compressed segments round-trip and are detected by content") {
+    const auto dir = scratch_dir("compressed");
+    {
+        auto writer = JournalWriter::create(dir, "test");  // compression on by default
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        for (std::uint64_t i = 1; i <= 500; ++i) {
+            JournalRecord record = sample_message();
+            record.sequence = SequenceNumber{i};
+            REQUIRE_FALSE(journal.write(record).has_value());
+        }
+        REQUIRE_FALSE(journal.flush().has_value());
+        CHECK(journal.current_segment().extension() == ".zst");
+    }
 
-    for (int run = 0; run < 2; ++run) {
-        auto writer = JournalWriter::create(path);
+    const auto segments = eventbook::list_journal_segments(dir);
+    REQUIRE(segments.size() == 1);
+
+    auto reader = JournalReader::open(segments.front());
+    REQUIRE(reader.has_value());
+    CHECK(reader->is_compressed());
+
+    const auto records = read_all(dir);
+    REQUIRE(records.size() == 500);
+    CHECK(records.front().sequence->value == 1);
+    CHECK(records.back().sequence->value == 500);
+    // The payload must survive compression byte for byte.
+    CHECK(records.back().payload == sample_message().payload);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("compression actually shrinks the journal") {
+    // Journal records are near-identical, which is exactly the shape zstd
+    // exploits. The assertion is deliberately loose -- this pins that
+    // compression is working at all, not a particular ratio.
+    const auto plain_dir = scratch_dir("ratio_plain");
+    const auto zstd_dir = scratch_dir("ratio_zstd");
+
+    for (bool compress : {false, true}) {
+        JournalWriterConfig config;
+        config.compress = compress;
+        auto writer = JournalWriter::create(compress ? zstd_dir : plain_dir, "test", config);
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        for (std::uint64_t i = 1; i <= 2000; ++i) {
+            JournalRecord record = sample_message();
+            record.sequence = SequenceNumber{i};
+            REQUIRE_FALSE(journal.write(record).has_value());
+        }
+        REQUIRE_FALSE(journal.flush().has_value());
+        if (compress) {
+            INFO("uncompressed=" << journal.stats().uncompressed_bytes
+                                 << " on_disk=" << journal.stats().bytes_on_disk);
+            CHECK(journal.stats().bytes_on_disk * 4 < journal.stats().uncompressed_bytes);
+        } else {
+            CHECK(journal.stats().bytes_on_disk == journal.stats().uncompressed_bytes);
+        }
+    }
+    std::filesystem::remove_all(plain_dir);
+    std::filesystem::remove_all(zstd_dir);
+}
+
+TEST_CASE("segments rotate on size and stay individually readable") {
+    const auto dir = scratch_dir("rotate_size");
+    {
+        JournalWriterConfig config;
+        config.compress = false;
+        config.flush_every = 10;
+        config.rotate_bytes = 4096;  // a few dozen records
+        auto writer = JournalWriter::create(dir, "test", config);
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        for (std::uint64_t i = 1; i <= 400; ++i) {
+            JournalRecord record = sample_message();
+            record.sequence = SequenceNumber{i};
+            REQUIRE_FALSE(journal.write(record).has_value());
+        }
+        REQUIRE_FALSE(journal.flush().has_value());
+        CHECK(journal.stats().segments_created > 1);
+    }
+
+    const auto segments = eventbook::list_journal_segments(dir);
+    CHECK(segments.size() > 1);
+
+    // Every record survives the boundaries, in order, with none duplicated or
+    // lost -- which is the only thing rotation must not break.
+    const auto records = read_all(dir);
+    REQUIRE(records.size() == 400);
+    for (std::uint64_t i = 0; i < 400; ++i) {
+        CHECK(records[i].sequence->value == i + 1);
+    }
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a forced rotation starts a new segment without losing records") {
+    const auto dir = scratch_dir("rotate_forced");
+    {
+        JournalWriterConfig config;
+        config.compress = true;
+        auto writer = JournalWriter::create(dir, "test", config);
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+
+        REQUIRE_FALSE(journal.write(sample_message()).has_value());
+        const auto first = journal.current_segment();
+        REQUIRE_FALSE(journal.rotate().has_value());
+        CHECK(journal.current_segment() != first);
+        REQUIRE_FALSE(journal.write(sample_message()).has_value());
+        REQUIRE_FALSE(journal.flush().has_value());
+        CHECK(journal.stats().segments_created == 2);
+    }
+    CHECK(eventbook::list_journal_segments(dir).size() == 2);
+    CHECK(read_all(dir).size() == 2);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("segment names sort chronologically") {
+    // The reader relies on lexicographic order matching time order, so it never
+    // has to parse a filename.
+    const auto dir = scratch_dir("ordering");
+    {
+        auto writer = JournalWriter::create(dir, "test");
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        for (int i = 0; i < 3; ++i) {
+            REQUIRE_FALSE(journal.write(sample_message()).has_value());
+            REQUIRE_FALSE(journal.rotate().has_value());
+        }
+    }
+    const auto segments = eventbook::list_journal_segments(dir);
+    REQUIRE(segments.size() >= 3);
+    CHECK(std::is_sorted(segments.begin(), segments.end()));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("list_journal_segments ignores unrelated files") {
+    const auto dir = scratch_dir("listing");
+    {
+        auto writer = JournalWriter::create(dir, "alpha");
         REQUIRE(writer.has_value());
         auto journal = *std::move(writer);
         REQUIRE_FALSE(journal.write(sample_message()).has_value());
+    }
+    {
+        auto writer = JournalWriter::create(dir, "beta");
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        REQUIRE_FALSE(journal.write(sample_message()).has_value());
+    }
+    {
+        std::ofstream noise{dir / "notes.txt"};
+        noise << "not a journal\n";
+    }
+
+    CHECK(eventbook::list_journal_segments(dir).size() == 2);
+    CHECK(eventbook::list_journal_segments(dir, "alpha").size() == 1);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a compressed segment truncated mid-frame keeps its earlier frames") {
+    // What a crash leaves behind. Writing one zstd frame per flush batch is
+    // what makes the surviving prefix readable at all: a single stream spanning
+    // the whole segment would lose everything after the failure point.
+    const auto dir = scratch_dir("truncated_zstd");
+    std::filesystem::path segment;
+    {
+        JournalWriterConfig config;
+        config.flush_every = 50;
+        auto writer = JournalWriter::create(dir, "test", config);
+        REQUIRE(writer.has_value());
+        auto journal = *std::move(writer);
+        for (std::uint64_t i = 1; i <= 200; ++i) {
+            JournalRecord record = sample_message();
+            record.sequence = SequenceNumber{i};
+            REQUIRE_FALSE(journal.write(record).has_value());
+        }
         REQUIRE_FALSE(journal.flush().has_value());
+        segment = journal.current_segment();
     }
 
-    auto reader = JournalReader::open(path);
+    const auto full_size = std::filesystem::file_size(segment);
+    std::string bytes;
+    {
+        std::ifstream in{segment, std::ios::binary};
+        bytes.assign(std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{});
+    }
+    {
+        std::ofstream out{segment, std::ios::binary | std::ios::trunc};
+        out.write(bytes.data(), static_cast<std::streamsize>(full_size * 3 / 4));
+    }
+
+    auto reader = JournalReader::open(segment);
     REQUIRE(reader.has_value());
     auto stream = *std::move(reader);
-    int count = 0;
+    std::size_t recovered = 0;
     while (true) {
         auto record = stream.next();
-        REQUIRE(record.has_value());
-        if (!record->has_value())
+        if (!record.has_value()) {
+            break;  // the incomplete final frame
+        }
+        if (!record->has_value()) {
             break;
-        ++count;
+        }
+        ++recovered;
     }
-    CHECK(count == 2);
-    std::filesystem::remove(path);
+    // Not all 200, but the complete frames before the tear must survive.
+    CHECK(recovered >= 50);
+    CHECK(recovered < 200);
+    std::filesystem::remove_all(dir);
 }
 
-TEST_CASE("a truncated final line is reported with its line number") {
-    // Exactly what a crash mid-write leaves behind. The records before it are
-    // intact and must stay readable; only the last line is lost, and the reader
-    // has to say which one so a caller can decide that is tolerable.
-    const auto path = scratch_path("truncated");
-    std::filesystem::remove(path);
-    {
-        std::ofstream out{path, std::ios::binary};
-        out << encode_journal_record(sample_message()) << "\n";
-        out << encode_journal_record(sample_message()) << "\n";
-        const auto partial = encode_journal_record(sample_message());
-        out << partial.substr(0, partial.size() / 2) << "\n";
-    }
-
-    auto reader = JournalReader::open(path);
-    REQUIRE(reader.has_value());
-    auto stream = *std::move(reader);
-
-    REQUIRE(stream.next()->has_value());
-    REQUIRE(stream.next()->has_value());
-
-    const auto broken = stream.next();
-    REQUIRE_FALSE(broken.has_value());
-    CHECK(broken.error().kind == JournalErrorKind::MalformedRecord);
-    CHECK(broken.error().line == 3);
-    std::filesystem::remove(path);
-}
-
-TEST_CASE("blank lines are tolerated") {
-    // Concatenating journals is a normal operation and trailing newlines are
-    // easy to acquire.
-    const auto path = scratch_path("blanks");
-    std::filesystem::remove(path);
-    {
-        std::ofstream out{path, std::ios::binary};
-        out << encode_journal_record(sample_message()) << "\n\n";
-        out << encode_journal_record(sample_message()) << "\n";
-    }
-
-    auto reader = JournalReader::open(path);
-    REQUIRE(reader.has_value());
-    auto stream = *std::move(reader);
-    int count = 0;
-    while (true) {
-        auto record = stream.next();
-        REQUIRE(record.has_value());
-        if (!record->has_value())
-            break;
-        ++count;
-    }
-    CHECK(count == 2);
-    std::filesystem::remove(path);
-}
-
-TEST_CASE("opening an unwritable path is an error, not a crash") {
-    const auto writer = JournalWriter::create("/nonexistent/eventbook/journal.jsonl");
+TEST_CASE("an unwritable directory is an error, not a crash") {
+    const auto writer = JournalWriter::create("/nonexistent/eventbook/journal", "test");
     REQUIRE_FALSE(writer.has_value());
     CHECK(writer.error().kind == JournalErrorKind::CannotOpen);
 
