@@ -8,6 +8,7 @@ add_executable(eventbook_tests
   unit/test_eligibility.cpp
   unit/test_identifiers.cpp
   unit/test_market.cpp
+  unit/test_order_book.cpp
   unit/test_market_query.cpp
   unit/test_price.cpp
   unit/test_quantity.cpp
