@@ -285,3 +285,60 @@ TEST_CASE("malformed messages are reported with the offending field") {
     REQUIRE_FALSE(bad_level.has_value());
     CHECK(bad_level.error().kind == WsParseErrorKind::MalformedLevel);
 }
+
+TEST_CASE("both price conventions normalize a live book identically") {
+    // Captured from the live socket: the same market, the same instant,
+    // subscribed twice with use_yes_price false and then true. The venue sends
+    // different bytes for each -- no_dollars_fp reads 0.0100 under no-leg
+    // pricing and 0.9900 under yes-leg -- but they describe one book, so the
+    // normalizer must erase the difference entirely.
+    const auto from_no_leg =
+        parsed(read_fixture("ws_live_snapshot_noleg.json"), PriceConvention::NoLegPricing);
+    const auto from_yes_leg =
+        parsed(read_fixture("ws_live_snapshot_yesleg.json"), PriceConvention::YesLegPricing);
+
+    const auto* no_leg = std::get_if<BookSnapshot>(&from_no_leg);
+    const auto* yes_leg = std::get_if<BookSnapshot>(&from_yes_leg);
+    REQUIRE(no_leg != nullptr);
+    REQUIRE(yes_leg != nullptr);
+
+    CHECK(no_leg->bids == yes_leg->bids);
+    CHECK(no_leg->asks == yes_leg->asks);
+    CHECK(no_leg->market_ticker == yes_leg->market_ticker);
+}
+
+TEST_CASE("a live snapshot agrees with the REST metadata for the same market") {
+    // GET /markets reported yes_bid_dollars 0.1600 and yes_ask_dollars 0.3500
+    // for KXFED-27APR-T4.25. The WebSocket book reconstructs to the same top of
+    // book by an entirely separate path, which is the strongest confirmation
+    // available that the YES/NO reflection is right.
+    const auto event =
+        parsed(read_fixture("ws_live_snapshot_noleg.json"), PriceConvention::NoLegPricing);
+    const auto* snapshot = std::get_if<BookSnapshot>(&event);
+    REQUIRE(snapshot != nullptr);
+
+    CHECK(snapshot->market_ticker.value == "KXFED-27APR-T4.25");
+    REQUIRE_FALSE(snapshot->bids.empty());
+    REQUIRE_FALSE(snapshot->asks.empty());
+    CHECK(snapshot->bids.front().price == Price{1600});
+    CHECK(snapshot->asks.front().price == Price{3500});
+    CHECK(snapshot->bids.front().price < snapshot->asks.front().price);
+}
+
+TEST_CASE("applying the wrong convention produces a crossed book") {
+    // This is what makes the not-crossed check worth having. Misreading the
+    // convention in either direction mirrors the ask side across $0.50, driving
+    // the best ask far below the best bid -- a state a real two-sided book
+    // cannot be in, and therefore a detectable one.
+    const auto wrong_way =
+        parsed(read_fixture("ws_live_snapshot_yesleg.json"), PriceConvention::NoLegPricing);
+    const auto* mirrored = std::get_if<BookSnapshot>(&wrong_way);
+    REQUIRE(mirrored != nullptr);
+    CHECK(mirrored->bids.front().price > mirrored->asks.front().price);
+
+    const auto other_way =
+        parsed(read_fixture("ws_live_snapshot_noleg.json"), PriceConvention::YesLegPricing);
+    const auto* also_mirrored = std::get_if<BookSnapshot>(&other_way);
+    REQUIRE(also_mirrored != nullptr);
+    CHECK(also_mirrored->bids.front().price > also_mirrored->asks.front().price);
+}

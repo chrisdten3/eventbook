@@ -187,10 +187,26 @@ detection is keyed by `SubscriptionId` and never as a single counter for the
 socket. Only `BookSnapshot` and `BookDelta` participate; `sequence_of` returns
 `nullopt` for everything else so acks and errors cannot be misread as gaps.
 
-**Open question for the live run:** whether `use_yes_price: true` keeps the
-field name `no_dollars_fp` while changing only the scale. That is the natural
-reading of the documentation, and both conventions are implemented and tested,
-but it has not been confirmed against a live socket.
+### Confirmed against the live socket
+
+`KXFED-27APR-T4.25` was subscribed twice at the same instant, once with each
+setting. Field names are **identical** — `no_dollars_fp` either way — and only
+the scale changes:
+
+| `use_yes_price` | first `no_dollars_fp` entries |
+|---|---|
+| `false` | `0.0100`, `0.0200`, `0.0300`, `0.0600` |
+| `true` | `0.9900`, `0.9800`, `0.9700`, `0.9400` |
+
+Quantities are unchanged and the prices are exactly `1 − p`, so the two
+encodings describe one book. A test asserts the normalizer produces byte-identical
+bids and asks from both, and that the reconstructed top of book (`$0.16` /
+`$0.35`) matches what `GET /markets` independently reported for the same market.
+
+Misapplying the convention in **either** direction mirrors the ask side across
+`$0.50` and drives the best ask below the best bid. That is why the
+not-crossed check earns its place: it detects the error without needing to know
+which convention was intended.
 
 ## Layer 3 - derived research rows *(not built yet)*
 
