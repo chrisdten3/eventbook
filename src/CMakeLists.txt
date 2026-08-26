@@ -20,6 +20,9 @@ add_library(eventbook_core
   common/time.cpp
   common/version.cpp
   data/events.cpp
+  features/feature_engine.cpp
+  features/feature_row.cpp
+  features/rolling_features.cpp
   data/journal.cpp
   replay/replay.cpp
 )

@@ -149,6 +149,12 @@ Result<ReplayResult, ReplayError> replay_segments(
                 state.emplace(metadata->market_ticker, metadata->price_grid);
             }
 
+            if (record.kind != JournalRecordKind::Message) {
+                if (options.before_record) {
+                    options.before_record(record, nullptr, *state);
+                }
+            }
+
             if (record.kind == JournalRecordKind::ConnectionLost) {
                 ++result.lifecycle_records;
                 // The book cannot span a disconnection: whatever the venue did
@@ -163,6 +169,11 @@ Result<ReplayResult, ReplayError> replay_segments(
 
             ++result.messages;
             auto event = parse_ws_message(record.payload, metadata->price_convention);
+            // Observed before the book is touched, so a sampler sees state as
+            // of the boundary rather than after this event lands.
+            if (options.before_record) {
+                options.before_record(record, event ? &*event : nullptr, *state);
+            }
             if (!event) {
                 ++result.parse_failures;
                 if (options.stop_on_parse_failure) {
@@ -186,6 +197,9 @@ Result<ReplayResult, ReplayError> replay_segments(
     if (state.has_value()) {
         if (last_time.has_value()) {
             state->finish(*last_time);
+            if (options.at_end) {
+                options.at_end(*state, *last_time);
+            }
         }
         result.market = state->stats();
         result.final_state_hash = state->state_hash();

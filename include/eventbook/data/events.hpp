@@ -122,6 +122,13 @@ using MarketEvent = std::variant<BookSnapshot, BookDelta, PublicTrade, Subscript
 /// The ticker an event concerns, when it concerns one.
 [[nodiscard]] std::optional<MarketTicker> market_ticker_of(const MarketEvent& event);
 
+/// The venue timestamp an event carries, when it carries one.
+///
+/// Snapshots and acknowledgements have none; deltas and trades do. Recording it
+/// on a journal record is what lets a derived feature row be traced back to the
+/// venue's own clock, not merely to ours.
+[[nodiscard]] std::optional<ExchangeTimestamp> exchange_time_of(const MarketEvent& event);
+
 /// The sequence number an event carries, when it carries one.
 ///
 /// Only snapshots and deltas participate in the per-subscription sequence;
