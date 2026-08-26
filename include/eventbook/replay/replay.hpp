@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -63,6 +64,19 @@ struct ReplayOptions {
     /// have its whole journal rejected at replay time, and the count is what
     /// makes the damage visible.
     bool stop_on_parse_failure{false};
+
+    /// Called before each record is applied, with the state as it currently
+    /// stands. This is where a feature sampler hooks in: a row must describe
+    /// the book as of an interval boundary using only events at or before it,
+    /// so sampling has to happen before the next event lands. Observing
+    /// afterwards would let information from after the boundary into the row.
+    /// The event is nullptr for lifecycle records and for payloads that did
+    /// not parse, so a caller never has to parse the payload a second time.
+    std::function<void(const JournalRecord&, const MarketEvent*, const MarketState&)> before_record;
+
+    /// Called once the journal is exhausted, so a sampler can close out its
+    /// final partial interval.
+    std::function<void(const MarketState&, LocalTimestamp)> at_end;
 };
 
 struct ReplayResult {

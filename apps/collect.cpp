@@ -222,6 +222,9 @@ int main(int argc, char** argv) {
                     record.market_ticker = *ticker_of;
                 }
                 record.sequence = sequence_of(*event);
+                // The venue's own clock, so a derived row can be traced to it and
+                // not only to ours.
+                record.exchange_time = exchange_time_of(*event);
                 record.message_type = std::visit(
                     [](const auto& payload_kind) -> std::string {
                         using Kind = std::decay_t<decltype(payload_kind)>;

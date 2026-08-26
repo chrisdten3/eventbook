@@ -30,3 +30,13 @@ target_link_libraries(replay
     CLI11::CLI11
     spdlog::spdlog
 )
+
+add_executable(build_features build_features.cpp)
+
+target_link_libraries(build_features
+  PRIVATE
+    eventbook::core
+    eventbook::warnings
+    CLI11::CLI11
+    spdlog::spdlog
+)

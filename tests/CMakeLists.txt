@@ -6,6 +6,7 @@ include(Catch)
 add_executable(eventbook_tests
   unit/test_decimal.cpp
   unit/test_eligibility.cpp
+  unit/test_features.cpp
   unit/test_identifiers.cpp
   unit/test_journal.cpp
   unit/test_market.cpp

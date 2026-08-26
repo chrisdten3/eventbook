@@ -39,6 +39,20 @@ std::optional<MarketTicker> market_ticker_of(const MarketEvent& event) {
         event);
 }
 
+std::optional<ExchangeTimestamp> exchange_time_of(const MarketEvent& event) {
+    return std::visit(
+        [](const auto& payload) -> std::optional<ExchangeTimestamp> {
+            using Payload = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<Payload, BookDelta> ||
+                          std::is_same_v<Payload, PublicTrade>) {
+                return payload.exchange_time;
+            } else {
+                return std::nullopt;
+            }
+        },
+        event);
+}
+
 std::optional<SequenceNumber> sequence_of(const MarketEvent& event) {
     return std::visit(
         [](const auto& payload) -> std::optional<SequenceNumber> {
