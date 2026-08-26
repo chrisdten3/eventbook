@@ -177,14 +177,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Takes the instant rather than reading the clock, so a caller that also
+    // updates the book uses one timestamp for both. Two separate local_now()
+    // calls put the journal and the live book tens of milliseconds apart, which
+    // is enough to make replayed metrics disagree with live ones.
     const auto journal_event = [&](JournalRecordKind kind, std::string_view type,
-                                   std::string_view payload) {
+                                   std::string_view payload, LocalTimestamp at) {
         if (!journal) {
             return;
         }
         JournalRecord record;
         record.kind = kind;
-        record.local_receive_time = local_now();
+        record.local_receive_time = at;
         record.connection_id = session.connection_id();
         record.message_type = std::string{type};
         record.market_ticker = market;
@@ -269,7 +273,16 @@ int main(int argc, char** argv) {
         // distinguish a quiet market from a period where we were simply absent,
         // and those demand opposite conclusions.
         if (notice == WsSessionNotice::Disconnected) {
-            journal_event(JournalRecordKind::ConnectionLost, "connection_lost", detail);
+            const auto at = local_now();
+            journal_event(JournalRecordKind::ConnectionLost, "connection_lost", detail, at);
+            // The book cannot span a disconnection: whatever the venue did while
+            // we were away is unknown. Without this the live book kept stale
+            // state across an outage and reported itself valid throughout, while
+            // replay -- which does invalidate on ConnectionLost -- correctly
+            // reported the lost interval. Found by the 24-hour run, where a
+            // 4-second DNS blip showed up as 0.000s of invalid time live and
+            // 4.047s on replay.
+            state.on_disconnected(at);
         }
         if (notice == WsSessionNotice::ParseFailure) {
             spdlog::warn("parse failure: {}", detail.substr(0, 200));
